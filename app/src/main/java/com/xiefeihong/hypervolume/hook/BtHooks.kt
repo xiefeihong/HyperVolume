@@ -129,7 +129,7 @@ object BtHooks {
                     sLastLoggedCurveValue = curved
                     XposedKit.log(
                         "modeA: step $step/$maxSteps avrcp $original -> $curved" +
-                            " (range=$minA~$maxA curve=" + Avrcp.curveLabel(curveType) + ")",
+                            " (range=$minA~$maxA curve=" + Avrcp.curveKey(curveType) + ")",
                     )
                 }
                 return curved

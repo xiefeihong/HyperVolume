@@ -1,5 +1,7 @@
 package com.xiefeihong.hypervolume.app
 
+import com.xiefeihong.hypervolume.R
+import com.xiefeihong.hypervolume.core.AppText
 import com.xiefeihong.hypervolume.core.Avrcp
 import com.xiefeihong.hypervolume.core.NativeVolumeCurve
 import com.xiefeihong.hypervolume.core.OutputDevice
@@ -36,8 +38,8 @@ object PreviewBuilder {
         val keySteps = Prefs.clampKeySteps(state.keySteps)
         val segs = Prefs.clampKeySteps(keySteps)
         val labels = PreviewLabels(
-            mediaSteps = "档位：$mediaSteps 档（范围 10~100）",
-            keySteps = "音量键步进：$keySteps 段（每次约跳 ${Prefs.keyDelta(mediaSteps, keySteps)} 档）",
+            mediaSteps = AppText.str(R.string.pv_label_media_steps, mediaSteps),
+            keySteps = AppText.str(R.string.pv_label_key_steps, keySteps, Prefs.keyDelta(mediaSteps, keySteps)),
         )
         return if (state.showingDefault) {
             buildDefaultPreview(state, deviceLabel, estimator, mediaSteps, keySteps, segs, labels)
@@ -57,8 +59,8 @@ object PreviewBuilder {
         val minStep = Prefs.clampSystemStep(state.rangeMin, mediaSteps)
         val maxStep = Prefs.clampSystemStep(state.rangeMax, mediaSteps)
         val curve = NativeVolumeCurve.curveFor(device, mediaSteps, state.nativeMode)
-        val minLabel = "最小音量：$minStep · 约 ${(minStep * 100.0 / mediaSteps).roundToInt()}%"
-        val maxLabel = "最大音量：$maxStep · 约 ${(maxStep * 100.0 / mediaSteps).roundToInt()}%"
+        val minLabel = AppText.str(R.string.pv_min_label, minStep, (minStep * 100.0 / mediaSteps).roundToInt())
+        val maxLabel = AppText.str(R.string.pv_max_label, maxStep, (maxStep * 100.0 / mediaSteps).roundToInt())
         val summary = Avrcp.buildDefaultPreview(mediaSteps, minStep, maxStep, keySteps, curve.gainDb)
 
         if (state.nativeAxis == NativeAxis.PERCENT) {
@@ -76,8 +78,14 @@ object PreviewBuilder {
             val windowPct = points.toIntArray()
             val windowGain = FloatArray(points.size) { anchors.gainByPercent[points[it]] }
             val windowDb = FloatArray(points.size) { anchors.gainDbByPercent[points[it]] }
-            val caption = "$deviceLabel · ${sourceLabel(anchors.source)} · 纵轴${modeLabel(anchors.mode)}" +
-                " · 范围${minPct}%~${maxPct}%"
+            val caption = AppText.str(
+                R.string.caption_native_percent,
+                deviceLabel,
+                sourceLabel(anchors.source),
+                modeLabel(anchors.mode),
+                minPct,
+                maxPct,
+            )
             // 曲线图：横轴窗口化到 [minPct,maxPct]（从设定最小值开始），仅取窗内原生增益。
             // 纵轴：dB 口径时以整条曲线 floor/ceil dB（百分 0/100 处）标注。
             val chart = ChartSpec.Native(
@@ -102,8 +110,14 @@ object PreviewBuilder {
             effGain[i] = curve.gainPercent[t]
             effDb[i] = curve.gainDb[t]
         }
-        val caption = "$deviceLabel · ${sourceLabel(curve.source)} · 纵轴${modeLabel(curve.mode)}" +
-            " · 范围$minStep~$maxStep"
+        val caption = AppText.str(
+            R.string.caption_native_steps,
+            deviceLabel,
+            sourceLabel(curve.source),
+            modeLabel(curve.mode),
+            minStep,
+            maxStep,
+        )
         val chart = ChartSpec.Native(
             xMin = 0, xMax = mediaSteps,
             gainByX = effGain, dots = buildPressLevels(mediaSteps, keySteps),
@@ -128,8 +142,8 @@ object PreviewBuilder {
         val maxAbs = max(state.rangeMin, state.rangeMax)
         val useSystemIndex = state.editingMode.attenuatesInSystemServer
         val valueMax = if (useSystemIndex) mediaSteps else Prefs.AVRCP_MAX_VOLUME
-        val minLabel = "最小音量：$minAbs · 约 ${(minAbs * 100.0 / valueMax).roundToInt()}%"
-        val maxLabel = "最大音量：$maxAbs · 约 ${(maxAbs * 100.0 / valueMax).roundToInt()}%"
+        val minLabel = AppText.str(R.string.pv_min_label, minAbs, (minAbs * 100.0 / valueMax).roundToInt())
+        val maxLabel = AppText.str(R.string.pv_max_label, maxAbs, (maxAbs * 100.0 / valueMax).roundToInt())
         // 关闭「启用档位修改」时档位/步进滑条锁到系统默认，故按当前快照的档位/步进 +
         // A/B 的最小/最大/曲线渲染预览；音量范围编辑区仍保持可用。
         val summary = Avrcp.buildPreview(
@@ -203,25 +217,22 @@ object PreviewBuilder {
     }
 
     /** 曲线数据来源（引擎表/策略表/AOSP）的显示文案。 */
-    private fun sourceLabel(source: NativeVolumeCurve.Source): String = when (source) {
-        NativeVolumeCurve.Source.ENGINE -> "引擎表·本机"
-        NativeVolumeCurve.Source.POLICY -> "策略表"
-        NativeVolumeCurve.Source.AOSP -> "AOSP 参考"
-    }
+    private fun sourceLabel(source: NativeVolumeCurve.Source): String = AppText.str(
+        when (source) {
+            NativeVolumeCurve.Source.ENGINE -> R.string.source_engine
+            NativeVolumeCurve.Source.POLICY -> R.string.source_policy
+            NativeVolumeCurve.Source.AOSP -> R.string.source_aosp
+        },
+    )
 
     /** 纵轴换算口径（dB线性/振幅/感知）的显示文案。 */
-    private fun modeLabel(mode: NativeVolumeCurve.Mode): String = when (mode) {
-        NativeVolumeCurve.Mode.AMPLITUDE -> "振幅线性"
-        NativeVolumeCurve.Mode.PERCEPTUAL -> "感知响度"
-        NativeVolumeCurve.Mode.DB_LINEAR -> "dB 线性"
-    }
-
-    /** 音量范围编辑区提示文案（与旧 `range_hint` 一致）。 */
-    const val RANGE_HINT =
-        "顶部选项卡在「蓝牙/有线耳机/外放」间切换，各设备独立保存模式与范围。" +
-            "蓝牙可选「绝对音量/相对音量/默认」；外放与有线仅「相对音量/默认」（绝对音量为蓝牙专属）。" +
-            "绝对音量：蓝牙经 AVRCP 映射；相对音量：手机端软件曲线衰减；" +
-            "默认：该设备把系统档位在所选范围内线性映射、保留原生曲线。总开关关闭时全部设备直通。"
+    private fun modeLabel(mode: NativeVolumeCurve.Mode): String = AppText.str(
+        when (mode) {
+            NativeVolumeCurve.Mode.AMPLITUDE -> R.string.axis_amplitude
+            NativeVolumeCurve.Mode.PERCEPTUAL -> R.string.axis_perceptual
+            NativeVolumeCurve.Mode.DB_LINEAR -> R.string.axis_db_linear
+        },
+    )
 }
 
 /** 依代表单元格文本估算「每行可容纳几个单元」；由 UI 用实测宽度实现（<=0 表示自然换行）。 */
@@ -302,8 +313,4 @@ data class Preview(
     val nativeSelectors: Boolean,
     /** 是否显示映射曲线选择区（「默认」模式无自定义曲线，隐藏）。 */
     val curveBlock: Boolean,
-) {
-
-    /** 音量范围编辑区提示（旧 `tvRangeHint`）。 */
-    val rangeHint: String get() = PreviewBuilder.RANGE_HINT
-}
+)

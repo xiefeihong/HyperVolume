@@ -1,5 +1,6 @@
 package com.xiefeihong.hypervolume.ui.screen
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
@@ -14,7 +15,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xiefeihong.hypervolume.R
 import com.xiefeihong.hypervolume.app.ConfigStore
-import com.xiefeihong.hypervolume.app.STATUS_DETECTING
 import com.xiefeihong.hypervolume.app.ColumnEstimator
 import com.xiefeihong.hypervolume.app.EditorState
 import com.xiefeihong.hypervolume.app.NativeAxis
@@ -38,7 +38,9 @@ import com.xiefeihong.hypervolume.ui.component.PrimaryButton
 import com.xiefeihong.hypervolume.ui.component.SectionCard
 import com.xiefeihong.hypervolume.ui.component.SectionDivider
 import com.xiefeihong.hypervolume.ui.component.SecondaryButton
+import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.DropdownItem
+import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.TabRow
 import top.yukonga.miuix.kmp.preference.OverlaySpinnerPreference
 import top.yukonga.miuix.kmp.preference.SliderPreference
@@ -55,7 +57,8 @@ import kotlin.math.roundToInt
 /** 运行状态卡：六行状态（Root / LSPosed / 模块配置 / 档位 / 蓝牙 / 音量模式）。 */
 @Composable
 fun StatusSection(snapshot: StatusSnapshot?) {
-    val lines = snapshot?.let { statusLines(it) } ?: List(6) { STATUS_DETECTING }
+    val detecting = stringResource(R.string.status_detecting)
+    val lines = snapshot?.let { statusLines(it) } ?: List(6) { detecting }
     SectionCard(title = stringResource(R.string.sec_status)) {
         lines.forEach { BodyText(it) }
     }
@@ -98,7 +101,10 @@ fun StepsSection(state: EditorState, preview: Preview, vm: HyperVolumeViewModel)
 }
 
 /**
- * 音量范围卡：设备选项卡 + 模式芯片 + 最小/最大滑条 + 曲线/口径选择 + 曲线图 + 映射预览。
+ * 音量范围卡：设备选项卡（卡片外部、与卡片同级）+ 模式芯片 + 最小/最大滑条 + 曲线/口径选择 + 曲线图 + 映射预览。
+ *
+ * 设备选项卡按要求抬到 [Card] 外（req-1）：它切换的是**整张卡**的内容，不是卡内某个子项，
+ * 因此与标题、卡片同级更符合 HyperCeiler 的层级。选项卡左划右划仍是切页（pager）手势，不冲突。
  *
  * [preview] 由上层统一构建（等宽表列数需实测可用宽度，ROM 真实曲线又是后台异步载入的），
  * 本页只消费预览数据：[Preview.curveBlock] 决定映射曲线选择器可见性，
@@ -118,54 +124,57 @@ fun RangeSection(state: EditorState, preview: Preview, vm: HyperVolumeViewModel)
         state.absoluteEditing -> 0
         else -> 1
     }
-    SectionCard(title = stringResource(R.string.sec_range)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 12.dp)) {
+        SmallTitle(text = stringResource(R.string.sec_range))
         TabRow(
             tabs = deviceTabs,
             selectedTabIndex = tabIndex,
             onTabSelected = vm::onSelectDeviceTab,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
         )
-        ChipRow(
-            options = modeOptions,
-            selectedIndex = modeIndex,
-            // 绝对音量为蓝牙专属：外放/有线置灰（选中会由 EditorState 归一为相对音量）
-            enabledAt = { it != 0 || state.absoluteAllowed },
-            onSelect = { index ->
-                when (index) {
-                    0 -> vm.onSelectMode(VolumeMode.ABSOLUTE)
-                    1 -> vm.onSelectMode(VolumeMode.SOFTWARE)
-                    else -> vm.onSelectDefault()
-                }
-            },
-        )
-        MonoText(preview.summary)
-        SectionDivider()
-        SliderPreference(
-            title = preview.minLabel,
-            value = state.rangeMin.toFloat(),
-            onValueChange = { vm.onRangeMin(it.roundToInt()) },
-            valueText = "${state.rangeMin}",
-            valueRange = 0f..state.rangeValueMax.toFloat(),
-            steps = (state.rangeValueMax - 1).coerceAtLeast(0),
-        )
-        SliderPreference(
-            title = preview.maxLabel,
-            value = state.rangeMax.toFloat(),
-            onValueChange = { vm.onRangeMax(it.roundToInt()) },
-            valueText = "${state.rangeMax}",
-            valueRange = 0f..state.rangeValueMax.toFloat(),
-            steps = (state.rangeValueMax - 1).coerceAtLeast(0),
-        )
-        if (preview.curveBlock) {
-            CurveSelector(state = state, vm = vm)
+        Card {
+            ChipRow(
+                options = modeOptions,
+                selectedIndex = modeIndex,
+                // 绝对音量为蓝牙专属：外放/有线置灰（选中会由 EditorState 归一为相对音量）
+                enabledAt = { it != 0 || state.absoluteAllowed },
+                onSelect = { index ->
+                    when (index) {
+                        0 -> vm.onSelectMode(VolumeMode.ABSOLUTE)
+                        1 -> vm.onSelectMode(VolumeMode.SOFTWARE)
+                        else -> vm.onSelectDefault()
+                    }
+                },
+            )
+            MonoText(preview.summary)
+            SectionDivider()
+            SliderPreference(
+                title = preview.minLabel,
+                value = state.rangeMin.toFloat(),
+                onValueChange = { vm.onRangeMin(it.roundToInt()) },
+                valueText = "${state.rangeMin}",
+                valueRange = 0f..state.rangeValueMax.toFloat(),
+                steps = (state.rangeValueMax - 1).coerceAtLeast(0),
+            )
+            SliderPreference(
+                title = preview.maxLabel,
+                value = state.rangeMax.toFloat(),
+                onValueChange = { vm.onRangeMax(it.roundToInt()) },
+                valueText = "${state.rangeMax}",
+                valueRange = 0f..state.rangeValueMax.toFloat(),
+                steps = (state.rangeValueMax - 1).coerceAtLeast(0),
+            )
+            if (preview.curveBlock) {
+                CurveSelector(state = state, vm = vm)
+            }
+            if (preview.nativeSelectors) {
+                NativeAxisSelectors(state = state, vm = vm)
+            }
+            SectionDivider()
+            CurveChart(spec = preview.chart, modifier = Modifier.padding(horizontal = 16.dp))
+            MonoText(preview.mappingTable)
+            HintText(stringResource(R.string.range_hint))
         }
-        if (preview.nativeSelectors) {
-            NativeAxisSelectors(state = state, vm = vm)
-        }
-        SectionDivider()
-        CurveChart(spec = preview.chart, modifier = Modifier.padding(horizontal = 16.dp))
-        MonoText(preview.mappingTable)
-        HintText(preview.rangeHint)
     }
 }
 
@@ -174,7 +183,7 @@ fun RangeSection(state: EditorState, preview: Preview, vm: HyperVolumeViewModel)
 fun ActionsSection(state: EditorState, snapshot: StatusSnapshot?, busy: Boolean, vm: HyperVolumeViewModel) {
     val pending = when {
         state.hasUnsavedChanges -> SaveEngine.Messages.pendingUnsaved
-        else -> snapshot?.pendingText ?: STATUS_DETECTING
+        else -> snapshot?.pendingText ?: stringResource(R.string.status_detecting)
     }
     SectionCard(title = stringResource(R.string.sec_actions)) {
         BodyText(pending)

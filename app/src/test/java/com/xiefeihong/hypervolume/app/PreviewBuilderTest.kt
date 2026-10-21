@@ -1,5 +1,6 @@
 package com.xiefeihong.hypervolume.app
 
+import com.xiefeihong.hypervolume.TextBackedTest
 import com.xiefeihong.hypervolume.core.DeviceConfig
 import com.xiefeihong.hypervolume.core.OutputDevice
 import com.xiefeihong.hypervolume.core.Prefs
@@ -16,7 +17,7 @@ import org.junit.Test
  * JVM 环境下 [com.xiefeihong.hypervolume.core.NativeVolumeCurve] 未 `load()`，一律走
  * AOSP 参考点表，因此断言只依赖纯计算结果（窗口化横轴、图注、曲线参数），不依赖本机 ROM。
  */
-class PreviewBuilderTest {
+class PreviewBuilderTest : TextBackedTest() {
 
     /** 列数估算交回自然换行（等价旧实现测不到宽度时返回 0）。 */
     private val noColumns = ColumnEstimator { 0 }

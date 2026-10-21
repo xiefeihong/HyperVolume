@@ -1,5 +1,6 @@
 package com.xiefeihong.hypervolume.core
 
+import com.xiefeihong.hypervolume.R
 import java.util.concurrent.TimeUnit
 
 /**
@@ -240,21 +241,21 @@ object Shell {
 
         val report = StringBuilder()
         if (sys.isNotEmpty()) {
-            report.append("[系统框架日志]\n").append(sys).append("\n\n")
+            report.append(AppText.str(R.string.log_sec_sys)).append(sys).append("\n\n")
         }
         if (bt.isNotEmpty()) {
-            report.append("[蓝牙日志]\n").append(bt).append("\n\n")
+            report.append(AppText.str(R.string.log_sec_bt)).append(bt).append("\n\n")
         }
         if (lspd.isNotEmpty()) {
-            report.append("[LSPosed 日志]\n").append(lspd).append("\n\n")
+            report.append(AppText.str(R.string.log_sec_lspd)).append(lspd).append("\n\n")
         }
         if (logcat.isNotEmpty()) {
-            report.append("[logcat]\n").append(logcat)
+            report.append(AppText.str(R.string.log_sec_logcat)).append(logcat)
         }
 
         if (report.length == 0) {
-            report.append("未找到任何日志。\n")
-                .append("请检查以下路径的文件是否存在：\n")
+            report.append(AppText.str(R.string.log_none))
+                .append(AppText.str(R.string.log_check_paths))
                 .append("• $SYS_LOG_FILE\n")
                 .append("• /data/adb/lspd/log/\n")
                 .append("• $BT_LOG_FILE")

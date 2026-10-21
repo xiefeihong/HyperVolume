@@ -1,5 +1,6 @@
 package com.xiefeihong.hypervolume.app
 
+import com.xiefeihong.hypervolume.TextBackedTest
 import com.xiefeihong.hypervolume.core.Prefs
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -9,7 +10,7 @@ import org.junit.Test
  *
  * 文案在 app 层以中文字面量生成，因此可在 JVM 直接断言，不需要 Robolectric 与 R 资源。
  */
-class StatusLinesTest {
+class StatusLinesTest : TextBackedTest() {
 
     private fun snapshot(
         root: Boolean = true,

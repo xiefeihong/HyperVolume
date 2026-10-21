@@ -179,11 +179,15 @@ class VolumeConfig(
         return sb.toString()
     }
 
+    /**
+     * 日志摘要里的设备简写：模式用 A/B/D 字母（与 [Avrcp.curveKey] 同口径，保持
+     * ASCII 不受界面语言影响）；它同时会进 system_server 侧的日志。
+     */
     private fun deviceDesc(c: DeviceConfig): String {
         val m = when (c.mode) {
             Prefs.BT_MODE_SOFTWARE -> "B"
             Prefs.BT_MODE_ABSOLUTE -> "A"
-            else -> "默认"
+            else -> "D"
         }
         val r = if (c.mode == Prefs.BT_MODE_DEFAULT) c.defaultRange else c.activeRange()
         return if (r == null) m else "$m[${r.min}~${r.max}/${r.curve}]"

@@ -1,0 +1,302 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ==================== 应用与模块元信息 ==================== -->
+    <string name="app_name">HyperVolume</string>
+    <string name="app_subtitle">Per-device steps for BT / wired / speaker · steps 10–100 · key segments 10–29</string>
+    <string name="module_description">Customize media volume steps (10–100) and volume-key increments (10–29), with Bluetooth absolute / relative / default volume modes and the real system curve view.</string>
+    <string name="xposed_description">Customize media volume steps (10–100) and volume-key increments (10–29), with two volume control modes.</string>
+
+    <!-- ==================== 导航（主页 → 设置 → 关于） ==================== -->
+    <string name="nav_settings">Settings</string>
+    <string name="nav_about">About</string>
+    <string name="nav_back">Back</string>
+    <string name="btn_refresh">Re-detect</string>
+    <string name="btn_logs">Module log</string>
+
+    <!-- ==================== 主页分区标题 ==================== -->
+    <string name="sec_status">Runtime status</string>
+    <string name="sec_media">Media volume steps</string>
+    <string name="sec_range">Volume range</string>
+    <string name="sec_curve">Mapping curve</string>
+    <string name="sec_actions">Actions</string>
+    <string name="sec_guide">How to use</string>
+
+    <!-- ==================== 档位与步进 ==================== -->
+    <string name="label_enable">Enable step remapping</string>
+    <string name="label_enable_summary">When off, every device falls back to the system default volume</string>
+    <string name="label_media_steps">Media volume steps</string>
+    <string name="label_key_steps">Volume-key increment</string>
+    <string name="media_hint">10–100 steps are allowed (default is the system native count). More steps mean a finer volume bar with more distinguishable levels. Changes stay in the UI until you tap Save, then follow the restart prompt.</string>
+    <string name="key_steps_hint">Each volume-key press jumps about “steps ÷ segments” levels. More segments mean smaller jumps; the on-screen slider is not limited and can be tuned one step at a time. When disabled or reset, segments default to the phone’s default step count.</string>
+
+    <!-- ==================== 音量范围与曲线 ==================== -->
+    <string name="range_hint" formatted="false">The tabs above switch between Bluetooth / wired headset / speaker, each keeping its own mode and range. Bluetooth offers absolute / relative / default; speaker and wired offer only relative / default (absolute volume is Bluetooth-only). Absolute: Bluetooth maps through AVRCP. Relative: the phone attenuates with a software curve. Default: the device linearly remaps system steps within the chosen range and keeps the native curve. With the master switch off every device is passthrough.</string>
+    <string name="curve_log">Logarithmic (geometric, default)</string>
+    <string name="curve_linear">Linear (equal per step)</string>
+    <string name="curve_sqrt">Square root (boosted low end)</string>
+    <string name="curve_hint" formatted="false">Choose how steps distribute across the volume range; in all three, step 1 = minimum and the top step = maximum. Curves for absolute and relative mode are stored separately.</string>
+    <string name="axis_y_title">Y axis</string>
+    <string name="axis_x_title">X axis</string>
+    <string name="axis_perceptual">Perceived loudness</string>
+    <string name="axis_db_linear">dB linear</string>
+    <string name="axis_amplitude">Amplitude linear</string>
+    <string name="axis_steps">Steps</string>
+    <string name="axis_percent">Percent</string>
+
+    <!-- ==================== 操作区 ==================== -->
+    <string name="btn_save">Save (after editing)</string>
+    <string name="btn_restart_bt">Restart Bluetooth (after mode/range change)</string>
+    <string name="btn_apply_restart">Restart system framework (after step change)</string>
+    <string name="btn_reset">Restore system default (disable)</string>
+    <string name="ops_hint">Edits stay staged in the UI until you tap Save; the confirmation dialog lists every change and asks whether to restart Bluetooth / the system framework right away.</string>
+
+    <!-- ==================== 通用按钮与提示 ==================== -->
+    <string name="dlg_copy">Copy</string>
+    <string name="dlg_clear">Clear</string>
+    <string name="dlg_close">Close</string>
+    <string name="toast_log_copied">Log copied to clipboard</string>
+    <string name="toast_copied">Copied to clipboard</string>
+    <string name="cancel">Cancel</string>
+    <string name="confirm">OK</string>
+
+    <!-- ==================== 设备 / 模式 / 曲线 短标签 ==================== -->
+    <string name="device_bt">Bluetooth</string>
+    <string name="device_wired">Wired</string>
+    <string name="device_speaker">Speaker</string>
+    <string name="mode_absolute">Absolute</string>
+    <string name="mode_software">Relative</string>
+    <string name="mode_default">Default</string>
+    <string name="curve_short_log">log</string>
+    <string name="curve_short_linear">linear</string>
+    <string name="curve_short_sqrt">sqrt</string>
+    <string name="enabled_on">on</string>
+    <string name="enabled_off">off</string>
+    <string name="range_unset">not set</string>
+    <string name="range_value">%1$d~%2$d/%3$s</string>
+    <string name="list_separator">", "</string>
+
+    <!-- ==================== 运行状态区 ==================== -->
+    <string name="status_detecting">Detecting…</string>
+    <string name="status_root_ok">Root: available (su granted)</string>
+    <string name="status_root_no">Root: unavailable, system config cannot be written</string>
+    <string name="status_lsposed_ok">LSPosed: installed</string>
+    <string name="status_lsposed_no">LSPosed: not detected, the module will not load</string>
+    <string name="status_module_active">Module: active</string>
+    <string name="status_module_pending">Module: not active, system framework restart required</string>
+    <string name="status_module_inactive_default">Module: disabled (system default)</string>
+    <string name="status_module_inactive_restore">Module: off, restart the system framework to restore</string>
+    <string name="status_volume_line">Steps: current %1$d · default %2$d (%3$s) · key increment %4$d</string>
+    <string name="status_bt_none">Bluetooth audio devices: none (connect a headset to see the mapping preview)</string>
+    <string name="status_bt_devices">Bluetooth audio devices: %1$s</string>
+    <string name="status_bt_item">%1$s (%2$s)</string>
+    <string name="status_bt_generic">Bluetooth device</string>
+    <string name="status_mode_line">Volume mode: %1$s</string>
+    <string name="steps_source_service">service</string>
+    <string name="steps_source_engine">engine table</string>
+    <string name="steps_source_builtin">built-in</string>
+    <string name="bt_type_sco">Bluetooth call (SCO)</string>
+    <string name="bt_type_a2dp">Bluetooth music (A2DP)</string>
+    <string name="bt_type_hearing_aid">Hearing aid</string>
+    <string name="bt_type_ble_headset">BLE headset</string>
+    <string name="bt_type_ble_speaker">BLE speaker</string>
+    <string name="bt_type_ble_broadcast">BLE broadcast</string>
+    <string name="pending_no">System steps already match the settings. After changing steps, tap “Restart system framework”.</string>
+    <string name="pending_yes">Settings are not applied yet (current %1$d steps ≠ target %2$d steps). Tap “Restart system framework” below.</string>
+    <string name="pending_unsaved">● Unsaved changes. Tap “Save” to apply them.</string>
+
+    <!-- ==================== 保存流程文案 ==================== -->
+    <string name="save_need_default_title">Cannot adjust steps reliably</string>
+    <string name="save_need_default_body">⚠ “Enable step remapping” is off while %1$s mode (not default) is selected, and the system default step count is unknown, so steps cannot be adjusted reliably. Choose how to proceed:</string>
+    <string name="save_title">Save changes</string>
+    <string name="save_none">Nothing to save.</string>
+    <string name="save_first">First save — the following configuration will be written and applied:</string>
+    <string name="save_confirm">Save</string>
+    <string name="resolve_enable">Enable step remapping</string>
+    <string name="resolve_default_mode">Use default mode</string>
+    <string name="resolve_default_steps">Use default step count</string>
+    <string name="push_fail">Failed to write the system configuration; make sure su is granted</string>
+    <string name="auto_save_fail">Auto-save failed: the system configuration could not be written, make sure su is granted</string>
+    <string name="save_done">Saved; no restart required.</string>
+    <string name="save_done_title">Saved</string>
+    <string name="restart_now">Restart now</string>
+    <string name="restart_later">Later</string>
+    <string name="restarting">Restarting…</string>
+    <string name="bt_restarting">Restarting Bluetooth</string>
+    <string name="bt_restart_fail">Bluetooth restart command failed (neither svc nor cmd available)</string>
+    <string name="sys_restarting">Restarting the system framework… the screen will briefly go black and this app will close</string>
+    <string name="clear_data_title">Clear data</string>
+    <string name="clear_data_msg">System default restored. Also clear everything this app wrote (configuration and logs)?</string>
+    <string name="clear_data_confirm">Clear</string>
+    <string name="data_cleared">App configuration and logs cleared.</string>
+    <string name="restart_system_title">Restart system framework</string>
+    <string name="restart_system_msg">The system framework will be restarted (like a reboot) to apply the step count.</string>
+    <string name="restart_system_confirm">Continue</string>
+    <string name="restart_what_both">Bluetooth and the system framework</string>
+    <string name="restart_what_bt">Bluetooth</string>
+    <string name="restart_what_sys">the system framework</string>
+    <string name="restart_now_msg">Changes saved. Restart %1$s to apply them — restart now?</string>
+    <string name="change_enabled">Enable step remapping: %1$s → %2$s</string>
+    <string name="change_steps">Steps: %1$d → %2$d</string>
+    <string name="change_key_steps">Volume-key increment: %1$d → %2$d</string>
+    <string name="change_mode">%1$s mode: %2$s → %3$s</string>
+    <string name="change_range">%1$s: %2$s → %3$s</string>
+    <string name="range_suffix_absolute">%1$s · absolute</string>
+    <string name="range_suffix_software">%1$s · relative</string>
+    <string name="range_suffix_default">%1$s · default</string>
+
+    <!-- ==================== 预览与映射表文案 ==================== -->
+    <string name="pv_no_data">No data</string>
+    <string name="pv_label_media_steps">Steps: %1$d (range 10–100)</string>
+    <string name="pv_label_key_steps">Volume-key increment: %1$d segments (about %2$d steps per press)</string>
+    <string name="pv_min_label">Minimum: %1$d · about %2$d%%</string>
+    <string name="pv_max_label">Maximum: %1$d · about %2$d%%</string>
+    <string name="pv_abs_header">Absolute volume mode: absolute kept · %1$s curve\n</string>
+    <string name="pv_abs_range">Media %1$d steps → Bluetooth AVRCP (0–127), range %2$d~%3$d\n</string>
+    <string name="pv_abs_first">Step 1 → AVRCP %1$d (about %2$d%%)\n</string>
+    <string name="pv_abs_spacing">Low-end gap: step 1→2 differs by %1$d\n</string>
+    <string name="pv_abs_spacing_small">⚠ Too small; with coarse headset granularity the levels may sound identical. Reduce steps or switch to relative mode\n</string>
+    <string name="pv_abs_spacing_ok">✓ Low end is well separated\n</string>
+    <string name="pv_abs_tip">Note: headsets expose few effective levels (often 8–19), so extra phone steps still collapse; relative mode solves this completely</string>
+    <string name="pv_soft_header">Relative volume mode: absolute disabled · %1$s curve\n</string>
+    <string name="pv_soft_range">Steps map directly to system volume steps, range %1$d~%2$d (%3$d steps total)\n</string>
+    <string name="pv_soft_tip">Note: adjust the headset with its own volume keys; headset-side volume display will stop syncing (expected)</string>
+    <string name="pv_default_header">Default mode: linear system-step mapping · ROM native curve\n</string>
+    <string name="pv_default_range">Media %1$d steps → system steps (0–%2$d) split linearly, range %3$d~%4$d (about %5$d%%–%6$d%%)\n</string>
+    <string name="pv_default_spacing">Low-end gap: step 1→2 differs by %1$s dB\n</string>
+    <string name="pv_default_spacing_small">⚠ Gap too small, adjacent steps sound alike; consider fewer steps\n</string>
+    <string name="pv_default_spacing_ok">✓ Low-end steps are distinguishable\n</string>
+    <string name="pv_default_tip">Note: both ends anchor to min/max while the middle keeps the ROM native loudness curve (full range = passthrough); the chart below uses system steps on X and dB-normalized gain (0–100%) on Y.</string>
+    <string name="pv_first_sys_step">Step 1 → system step %1$d/%2$d (about %3$d%%)\n</string>
+    <string name="hint_dup_ok_avrcp">✓ Every key press lands on a distinct AVRCP value\n</string>
+    <string name="hint_dup_many_avrcp">⚠ %1$d adjacent presses land on the same AVRCP value (increase segments for smaller jumps)\n</string>
+    <string name="hint_dup_ok_sys">✓ Every key press lands on a distinct system step\n</string>
+    <string name="hint_dup_many_sys">⚠ %1$d adjacent presses land on the same system step (increase segments for smaller jumps)\n</string>
+    <string name="hint_low_warn">⚠ Below the audible floor of some headsets; low volume may be silent\n</string>
+    <string name="hint_low_ok">✓ Above the usual audible floor\n</string>
+    <string name="table_col_sys">system steps (0–%1$d)</string>
+    <string name="table_col_avrcp">AVRCP volume (0–127)</string>
+    <string name="table_press_title">Presses → %1$s, %2$d total:\n</string>
+    <string name="table_native_db_title">Presses → gain (dB, hardware ladder), %1$d total:\n</string>
+    <string name="table_native_pct_title">Presses → relative gain (dB-normalized 0–100%%), %1$d total:\n</string>
+    <string name="table_percent_db_title">Step percent → gain (dB, hardware ladder), %1$d points:\n</string>
+    <string name="table_percent_pct_title">Step percent → relative gain (dB-normalized 0–100%%), %1$d points:\n</string>
+    <string name="source_engine">engine table · local</string>
+    <string name="source_policy">policy table</string>
+    <string name="source_aosp">AOSP reference</string>
+    <string name="caption_native_percent">%1$s · %2$s · Y %3$s · range %4$d%%–%5$d%%</string>
+    <string name="caption_native_steps">%1$s · %2$s · Y %3$s · range %4$d~%5$d</string>
+    <string name="chart_mapped_caption">%1$s curve · %2$s %3$d~%4$d · ○ = key press landing</string>
+    <string name="chart_native_caption">Native · %1$s</string>
+    <string name="chart_axis_sys">system steps</string>
+    <string name="chart_axis_avrcp">AVRCP</string>
+
+    <!-- ==================== 模块日志页 ==================== -->
+    <string name="log_title">Module log (HyperVolume)</string>
+    <string name="log_empty">No module log found. Possible reasons:\n• The module is not enabled in LSPosed\n• The system framework / Bluetooth has not been restarted since installing this build (hooks load only at process start)\n• This view shows all levels; the LSPosed log page records errors (E) only</string>
+    <string name="log_sec_sys">[System framework log]\n</string>
+    <string name="log_sec_bt">[Bluetooth log]\n</string>
+    <string name="log_sec_lspd">[LSPosed log]\n</string>
+    <string name="log_sec_logcat">[logcat]\n</string>
+    <string name="log_none">No log found.\n</string>
+    <string name="log_check_paths">Check whether these files exist:\n</string>
+    <string name="log_loading">Reading logs…</string>
+    <string name="log_page_summary">Module logs from system_server, Bluetooth and LSPosed</string>
+    <string name="refresh_summary">Re-detect root, LSPosed and the current volume steps</string>
+    <string name="logs_cleared">Log files cleared</string>
+    <string name="action_failed">Operation failed: %1$s</string>
+    <string name="config_adopted">Existing configuration read from the system and restored in the UI</string>
+
+    <!-- ==================== 设置页 ==================== -->
+    <string name="tab_general">General</string>
+    <string name="tab_backup">Backup</string>
+    <string name="tab_troubleshoot">Diagnostics</string>
+    <string name="pref_language">Language</string>
+    <string name="pref_theme">Colour</string>
+    <string name="pref_language_summary">Switch the app language right away (system language is untouched)</string>
+    <string name="lang_system">Follow system</string>
+    <string name="lang_zh">简体中文</string>
+    <string name="lang_en">English</string>
+    <string name="theme_system">Follow system</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+
+    <!-- ==================== 备份与恢复 ==================== -->
+    <string name="backup_intro">A backup is a JSON archive holding the active configuration (XML), the staged app configuration, the step baseline and local preferences such as language and colour. After restoring, restart the system framework or Bluetooth if prompted.</string>
+    <string name="backup_export">Export backup</string>
+    <string name="backup_export_summary">Save current configuration and preferences as a .json file</string>
+    <string name="backup_import">Import backup</string>
+    <string name="backup_import_summary">Restore configuration and preferences from a .json archive</string>
+    <string name="backup_file_name">HyperVolume-backup.json</string>
+    <string name="backup_export_ok">Backup exported (%1$d entries)</string>
+    <string name="backup_export_fail">Export failed: %1$s</string>
+    <string name="backup_import_ok">Import succeeded (%1$d entries)</string>
+    <string name="backup_import_fail">Import failed: not a valid HyperVolume backup file</string>
+    <string name="backup_import_error">Import failed: %1$s</string>
+    <string name="backup_imported_restart">Backup imported and written to the system; a restart is required.</string>
+    <string name="backup_scope_title">Backup contents</string>
+    <string name="backup_scope_body">• Active configuration XML (this module’s Settings.Global key)\n• Staged app configuration and unsaved edits\n• System native step count and the restore-default acknowledgement flag\n• UI preferences: language, colour, device tab, etc.\nBluetooth pairing data and the LSPosed enable state are not included.</string>
+
+    <!-- ==================== 故障排除 / 调试信息 ==================== -->
+    <string name="debug_info">Debug info</string>
+    <string name="debug_info_summary">Version, device and runtime snapshot for bug reports</string>
+    <string name="debug_title">Debug info</string>
+    <string name="debug_loading">Collecting…</string>
+    <string name="debug_copy_all">Copy all</string>
+    <string name="debug_module_version">Module version: %1$s (%2$d)</string>
+    <string name="debug_build_type">Build type: %1$s</string>
+    <string name="debug_package">Package: %1$s</string>
+    <string name="debug_android">Android: %1$s (API %2$d)</string>
+    <string name="debug_rom">ROM: %1$s</string>
+    <string name="debug_device">Device: %1$s %2$s</string>
+    <string name="debug_incremental">Build fingerprint: %1$s</string>
+    <string name="debug_root">Root: %1$s</string>
+    <string name="debug_lsposed">LSPosed: %1$s</string>
+    <string name="debug_framework">Xposed framework: %1$s</string>
+    <string name="debug_steps_source">Step count source: %1$s</string>
+    <string name="debug_available">available</string>
+    <string name="debug_unavailable">unavailable</string>
+    <string name="debug_installed">installed</string>
+    <string name="debug_not_installed">not detected</string>
+    <string name="debug_config_title">Active configuration (Settings.Global)</string>
+    <string name="debug_local_config_title">Staged app configuration</string>
+    <string name="debug_no_config">No configuration recorded yet</string>
+    <string name="debug_log_paths">Log paths: %1$s</string>
+
+    <!-- ==================== 关于页 ==================== -->
+    <string name="about_title">About</string>
+    <string name="about_version_card">Version</string>
+    <string name="about_current_version">Current version: %1$s</string>
+    <string name="about_build_variant">Build type: %1$s</string>
+    <string name="about_check_update">Check for updates</string>
+    <string name="about_check_update_summary">Fetch the latest release from GitHub</string>
+    <string name="update_checking">Checking for updates…</string>
+    <string name="update_latest">Already up to date (%1$s)</string>
+    <string name="update_found">New version available: %1$s (current %2$s)</string>
+    <string name="update_failed">Update check failed: %1$s</string>
+    <string name="update_network_fail">Cannot reach GitHub; check the network and retry</string>
+    <string name="update_notes">Release notes: %1$s</string>
+    <string name="update_time">Published: %1$s</string>
+    <string name="about_github">GitHub repository</string>
+    <string name="about_github_summary">Home page, sources and issue tracker</string>
+    <string name="about_licenses">Open source licences</string>
+    <string name="about_licenses_summary">Licences of this project and its dependencies</string>
+    <string name="about_credits">Credits</string>
+    <string name="about_credits_summary">Upstream projects this module builds on</string>
+    <string name="about_device_info">Device info</string>
+    <string name="about_device_info_summary">ROM, Android and Xposed framework details</string>
+    <string name="about_open_fail">Cannot open link: %1$s</string>
+    <string name="about_credits_body">HyperVolume is released under the GNU GPLv3. Its design and API usage were inspired by Miuix, YukiHookAPI, KavaRef and HyperCeiler — thanks to all of them; using this project means also complying with each upstream licence.</string>
+    <string name="license_gpl">HyperVolume (this project)</string>
+    <string name="license_gpl_summary">GNU General Public License v3.0</string>
+    <string name="license_miuix">Miuix</string>
+    <string name="license_miuix_summary">Apache License 2.0 · Miui-style Compose component library</string>
+    <string name="license_yuki">YukiHookAPI</string>
+    <string name="license_yuki_summary">Apache License 2.0 · Kotlin Xposed framework API</string>
+    <string name="license_kava">KavaRef</string>
+    <string name="license_kava_summary">Apache License 2.0 · reflection DSL</string>
+    <string name="license_libxposed">libxposed API</string>
+    <string name="license_libxposed_summary">Apache License 2.0 · modern LSPosed API</string>
+
+    <!-- ==================== 使用说明（关于页） ==================== -->
+    <string name="guide_text" formatted="false">1. Enable this module in LSPosed, then restart the system framework (the button on the home page does it).\n2. Media volume steps: 10–100 (HyperOS ships 15 natively). A step is one distinguishable position on the volume bar and only affects the media stream; after changing steps tap “Restart system framework” — a short black screen is normal. The volume-key increment (10–29 segments) sets how many steps one press skips (about steps ÷ segments) and affects only the keys, not the on-screen slider.\n3. Absolute mode: Bluetooth keeps absolute mapping (steps map through the curve to AVRCP 0–127); step 1 = minimum, top step = maximum.\n4. Relative mode (best fix for quiet low volume): absolute volume is disabled and the phone attenuates the signal with a software curve while the headset stays at its own hardware volume.\n5. Default mode: the step count is untouched and no custom curve is added — system steps are split linearly inside the chosen min/max, both ends anchor to min/max and the middle keeps the ROM native loudness curve (full range = passthrough); switch the chart axis (dB linear / perceived loudness) to inspect that native curve.\n6. The device tabs switch between Bluetooth / wired / speaker and each keeps its own mode and range (the app focuses the current output on launch). Absolute is Bluetooth-only; relative attenuates in the system for all three devices within their own range; default remaps that device’s steps linearly inside min/max keeping the ROM curve. The step count and key increment are global.\n7. Applying: tap Save and confirm the restart prompt. Mode or range changes need “Restart Bluetooth”; step changes need “Restart system framework” (the key increment applies immediately).\n8. Restore defaults: tap “Restore system default” and restart, or disable the module in LSPosed and reboot.\n9. Troubleshooting: check the status card for the effective step count, and open Settings → Diagnostics → Module log for the module’s own log.</string>
+</resources>

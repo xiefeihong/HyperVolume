@@ -4,6 +4,8 @@ import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.util.Log
+import com.xiefeihong.hypervolume.R
+import com.xiefeihong.hypervolume.core.AppText
 import com.xiefeihong.hypervolume.core.NativeVolumeCurve
 import com.xiefeihong.hypervolume.core.OutputDevice
 import com.xiefeihong.hypervolume.core.Prefs
@@ -20,6 +22,9 @@ import com.xiefeihong.hypervolume.core.VolumeConfig
  * 判定链与旧实现逐字一致：系统原生档位数来源优先级为「已固化的服务实测值 >
  * ROM 引擎表 XML > 内置默认」，模块生效状态由「当前系统档位 vs 目标档位」与
  * 「当前档位 vs 系统默认」两组比对得出。
+ *
+ * 文案全部经 [AppText] 按资源取值，因此随语言切换（单测注入 XML 解析器即可继续
+ * 用中文断言，见 `TestText`）。
  */
 class StatusProbe(context: Context, private val store: ConfigStore) {
 
@@ -64,7 +69,7 @@ class StatusProbe(context: Context, private val store: ConfigStore) {
             var wired = false
             for (device in manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
                 val type = device.type
-                if (bluetoothTypeName(type) != null) {
+                if (bluetoothTypeLabelRes(type) != 0) {
                     return OutputDevice.BT          // 蓝牙优先
                 }
                 if (type == TYPE_WIRED_HEADSET || type == TYPE_WIRED_HEADPHONES || type == TYPE_USB_HEADSET) {
@@ -78,14 +83,17 @@ class StatusProbe(context: Context, private val store: ConfigStore) {
         }
     }
 
-    /** 汇总当前已连接的蓝牙音频输出设备（`设备名（类型名）`）；未连接返回空列表。 */
+    /** 汇总当前已连接的蓝牙音频输出设备（`名称（类型）`）；未连接返回空列表。 */
     fun bluetoothDevices(): List<String> {
         val manager = audioManager ?: return emptyList()
         return try {
             manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
                 .mapNotNull { device ->
-                    val typeName = bluetoothTypeName(device.type) ?: return@mapNotNull null
-                    deviceLabel(device) + "（" + typeName + "）"
+                    val typeRes = bluetoothTypeLabelRes(device.type)
+                    if (typeRes == 0) {
+                        return@mapNotNull null
+                    }
+                    AppText.str(R.string.status_bt_item, deviceLabel(device), AppText.str(typeRes))
                 }
         } catch (t: Throwable) {
             Log.w(LOG_TAG, "buildBluetoothSummary failed", t)
@@ -95,18 +103,18 @@ class StatusProbe(context: Context, private val store: ConfigStore) {
 
     private fun deviceLabel(device: AudioDeviceInfo): String {
         val name = device.productName
-        return if (name.isNullOrEmpty()) "蓝牙设备" else name.toString()
+        return if (name.isNullOrEmpty()) AppText.str(R.string.status_bt_generic) else name.toString()
     }
 
-    /** 判断是否为蓝牙相关输出设备并返回类型名（使用常量字面值以兼容低版本 API）。 */
-    private fun bluetoothTypeName(type: Int): String? = when (type) {
-        7 -> "蓝牙通话 SCO" // AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-        8 -> "蓝牙音乐 A2DP" // AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
-        23 -> "助听器" // AudioDeviceInfo.TYPE_HEARING_AID
-        26 -> "蓝牙 LE 耳机" // TYPE_BLE_HEADSET（API 31+）
-        27 -> "蓝牙 LE 音箱" // TYPE_BLE_SPEAKER（API 31+）
-        30 -> "蓝牙 LE 广播" // TYPE_BLE_BROADCAST（API 33+）
-        else -> null
+    /** 蓝牙相关输出设备的类型名资源；非蓝牙设备返回 0（用字面值兼容低版本 API）。 */
+    private fun bluetoothTypeLabelRes(type: Int): Int = when (type) {
+        7 -> R.string.bt_type_sco            // AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+        8 -> R.string.bt_type_a2dp           // AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+        23 -> R.string.bt_type_hearing_aid   // AudioDeviceInfo.TYPE_HEARING_AID
+        26 -> R.string.bt_type_ble_headset   // TYPE_BLE_HEADSET（API 31+）
+        27 -> R.string.bt_type_ble_speaker   // TYPE_BLE_SPEAKER（API 31+）
+        30 -> R.string.bt_type_ble_broadcast // TYPE_BLE_BROADCAST（API 33+）
+        else -> 0
     }
 
     // ==================== 状态汇总 ====================
@@ -153,10 +161,9 @@ class StatusProbe(context: Context, private val store: ConfigStore) {
             else -> ModuleVerdict.INACTIVE_PENDING_RESTORE
         }
         val pendingText = if (actualMedia == targetMedia) {
-            PENDING_NO
+            AppText.str(R.string.pending_no)
         } else {
-            "检测到设置尚未生效（当前 $actualMedia 档 ≠ 目标 $targetMedia 档），" +
-                "点击下方「重启系统框架」使其生效。"
+            AppText.str(R.string.pending_yes, actualMedia, targetMedia)
         }
         return StatusSnapshot(
             rootGranted = root,
@@ -188,17 +195,11 @@ class StatusProbe(context: Context, private val store: ConfigStore) {
         /** App 侧日志 tag：catch 兜底记录，保证异常可见。 */
         const val LOG_TAG = "HyperVolumeUI"
 
-        /** 音量大小区间内无需重启的提示文案（与旧 `pending_no` 一致）。 */
-        const val PENDING_NO = "当前系统档位与设置一致。档位修改后点「重启系统框架」生效。"
-
-        /** 模块日志弹框标题。 */
-        const val LOG_TITLE = "模块日志（HyperVolume）"
+        /** 模块日志标题（界面与剪贴板标签共用）。 */
+        fun logTitle(): String = AppText.str(R.string.log_title)
 
         /** 日志为空时的排查提示（与旧 `log_empty` 一致）。 */
-        const val LOG_EMPTY = "未找到模块日志。可能原因：\n" +
-            "• LSPosed 中未启用模块\n" +
-            "• 安装本版本后尚未重启过系统框架 / 蓝牙（Hook 只在进程启动时加载）\n" +
-            "• 此处显示全部级别日志；LSPosed 日志页仅记录错误日志（E 级）"
+        fun logEmpty(): String = AppText.str(R.string.log_empty)
 
         // AudioDeviceInfo 类型字面值（避免引用高版本常量，与旧实现一致）。
         private const val TYPE_WIRED_HEADSET = 3
@@ -212,14 +213,11 @@ enum class StepsSource { SERVICE, ENGINE_XML, BUILTIN }
 
 // ==================== 状态区文案（纯函数，供界面逐行渲染） ====================
 
-/** 探测未完成时的占位行（等价旧 `status_detecting`）。 */
-const val STATUS_DETECTING = "检测中…"
-
 /**
  * 运行状态区的六行文案（复刻旧 `StatusProbe.renderStatus` + `strings.xml` 的 `status_*`）。
  *
  * 顺序与旧布局一致：Root → LSPosed → 模块配置 → 档位 → 蓝牙设备 → 音量模式。
- * 放在 app 层用中文字面量生成，使文案可在 JVM 单测直接断言、不依赖 R 资源。
+ * 文案在 app 层经 [AppText] 取资源，单测注入 XML 解析器后可继续直接断言中文。
  */
 internal fun statusLines(snapshot: StatusSnapshot): List<String> = listOf(
     statusRootText(snapshot.rootGranted),
@@ -230,39 +228,50 @@ internal fun statusLines(snapshot: StatusSnapshot): List<String> = listOf(
     statusModeText(snapshot.bluetoothMode),
 )
 
+/** 探测未完成时的占位行（等价旧 `status_detecting`）。 */
+internal fun statusDetectingText(): String = AppText.str(R.string.status_detecting)
+
 internal fun statusRootText(granted: Boolean): String =
-    if (granted) "Root：可用（su 已授权）" else "Root：不可用，无法写入系统配置"
+    AppText.str(if (granted) R.string.status_root_ok else R.string.status_root_no)
 
 internal fun statusLsposedText(installed: Boolean): String =
-    if (installed) "LSPosed：已安装" else "LSPosed：未检测到，模块将无法加载"
+    AppText.str(if (installed) R.string.status_lsposed_ok else R.string.status_lsposed_no)
 
-internal fun statusModuleText(verdict: ModuleVerdict): String = when (verdict) {
-    ModuleVerdict.ACTIVE -> "模块配置：已生效"
-    ModuleVerdict.PENDING_RESTART -> "模块配置：未生效，需重启系统框架"
-    ModuleVerdict.INACTIVE_DEFAULT -> "模块配置：未启用（系统默认）"
-    ModuleVerdict.INACTIVE_PENDING_RESTORE -> "模块配置：已关闭，需重启系统框架恢复"
-}
+internal fun statusModuleText(verdict: ModuleVerdict): String = AppText.str(
+    when (verdict) {
+        ModuleVerdict.ACTIVE -> R.string.status_module_active
+        ModuleVerdict.PENDING_RESTART -> R.string.status_module_pending
+        ModuleVerdict.INACTIVE_DEFAULT -> R.string.status_module_inactive_default
+        ModuleVerdict.INACTIVE_PENDING_RESTORE -> R.string.status_module_inactive_restore
+    },
+)
 
 /** 「档位：当前 X · 默认 Y（来源）· 音量键步进 Z」。 */
-internal fun statusVolumeLine(snapshot: StatusSnapshot): String =
-    "档位：当前 ${snapshot.actualMediaSteps} · 默认 ${snapshot.systemDefaultSteps}" +
-        "（${stepsSourceLabel(snapshot.stepsSource)}）· 音量键步进 ${snapshot.keySteps}"
+internal fun statusVolumeLine(snapshot: StatusSnapshot): String = AppText.str(
+    R.string.status_volume_line,
+    snapshot.actualMediaSteps,
+    snapshot.systemDefaultSteps,
+    stepsSourceLabel(snapshot.stepsSource),
+    snapshot.keySteps,
+)
 
 internal fun statusBluetoothText(devices: List<String>): String =
     if (devices.isEmpty()) {
-        "蓝牙音频设备：未连接（连接耳机后可回来看映射预览）"
+        AppText.str(R.string.status_bt_none)
     } else {
-        "蓝牙音频设备：" + devices.joinToString("、")
+        AppText.str(R.string.status_bt_devices, devices.joinToString(AppText.str(R.string.list_separator)))
     }
 
-internal fun statusModeText(mode: Int): String = "音量模式：${modeLabelShort(mode)}"
+internal fun statusModeText(mode: Int): String = AppText.str(R.string.status_mode_line, modeLabelShort(mode))
 
 /** 系统默认档位数的取值来源标注（服务实测 / 引擎表 / 内置默认）。 */
-internal fun stepsSourceLabel(source: StepsSource): String = when (source) {
-    StepsSource.SERVICE -> "服务"
-    StepsSource.ENGINE_XML -> "引擎表"
-    StepsSource.BUILTIN -> "默认"
-}
+internal fun stepsSourceLabel(source: StepsSource): String = AppText.str(
+    when (source) {
+        StepsSource.SERVICE -> R.string.steps_source_service
+        StepsSource.ENGINE_XML -> R.string.steps_source_engine
+        StepsSource.BUILTIN -> R.string.steps_source_builtin
+    },
+)
 
 /** 模块配置生效状态（界面据此显示「已生效 / 需重启 / 未启用」）。 */
 enum class ModuleVerdict { ACTIVE, PENDING_RESTART, INACTIVE_DEFAULT, INACTIVE_PENDING_RESTORE }

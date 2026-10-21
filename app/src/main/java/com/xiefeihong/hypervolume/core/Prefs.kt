@@ -40,6 +40,18 @@ object Prefs {
     const val KEY_SYSTEM_DEFAULT_ACK = "system_default_ack"
 
     /**
+     * 界面语言偏好：`system` / `zh` / `en`（见 app 层 [AppLanguage] 的 tag）。
+     * 只影响本 App 的资源取值，不改系统语言；切换后需重建 Activity 生效。
+     */
+    const val KEY_LANGUAGE = "ui_language"
+
+    /** 颜色（主题）模式偏好：0 跟随系统 / 1 浅色 / 2 深色。 */
+    const val KEY_THEME_MODE = "ui_theme_mode"
+
+    /** 设置页当前标签位：0 通用 / 1 备份与恢复 / 2 故障排除（仅记忆界面位置）。 */
+    const val KEY_SETTINGS_TAB = "ui_settings_tab"
+
+    /**
      * 蓝牙音量控制模式 A：保持绝对音量（默认）。
      * 手机档位经低音量增强曲线映射为 0~127 的绝对音量发送给耳机。
      */
@@ -97,6 +109,9 @@ object Prefs {
 
     /** 媒体流索引（android.media.AudioSystem.STREAM_MUSIC 的稳定取值）。 */
     const val STREAM_MUSIC_INDEX = 3
+
+    /** 设置页标签位默认值（通用）。 */
+    const val SETTINGS_TAB_DEFAULT = 0
 
     /** App 侧 SharedPreferences 句柄。 */
     fun get(context: Context): SharedPreferences =

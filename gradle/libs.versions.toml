@@ -10,6 +10,7 @@ yukihook = "1.5.0"
 kavaref = "1.1.1"
 libxposed = "102.0.0"
 junit = "4.13.2"
+json = "20250107"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -49,3 +50,5 @@ kavaref-extension = { module = "com.highcapable.kavaref:kavaref-extension" }
 libxposed-api = { module = "io.github.libxposed:api", version.ref = "libxposed" }
 
 junit = { module = "junit:junit", version.ref = "junit" }
+# JVM 单测里的 org.json 是 android.jar 桩件（方法全返回默认值），需显式引入真实实现才能测编解码
+json = { module = "org.json:json", version.ref = "json" }

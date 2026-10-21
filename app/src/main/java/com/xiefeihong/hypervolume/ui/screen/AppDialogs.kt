@@ -1,26 +1,17 @@
 package com.xiefeihong.hypervolume.ui.screen
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.xiefeihong.hypervolume.R
 import com.xiefeihong.hypervolume.app.BlockedChoice
 import com.xiefeihong.hypervolume.app.SaveEngine
-import com.xiefeihong.hypervolume.app.StatusProbe
 import com.xiefeihong.hypervolume.ui.DialogSpec
 import com.xiefeihong.hypervolume.ui.HyperVolumeViewModel
 import com.xiefeihong.hypervolume.ui.component.DialogButtons
-import com.xiefeihong.hypervolume.ui.component.MonoText
 import com.xiefeihong.hypervolume.ui.component.PrimaryButton
 import com.xiefeihong.hypervolume.ui.component.SecondaryButton
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
@@ -29,7 +20,8 @@ import top.yukonga.miuix.kmp.overlay.OverlayDialog
  * 全部弹框（移植自旧 `AlertDialog` 调用点）。
  *
  * 统一走 Miuix [OverlayDialog]：`title` + `summary` 承载标题与正文——文案全部来自 app 层的
- * [SaveEngine.Messages] / [StatusProbe]，界面只负责装配按钮与动作，保持与旧实现逐条对应。
+ * [SaveEngine.Messages]，界面只负责装配按钮与动作，保持与旧实现逐条对应。
+ * 模块日志不再占弹框，已改为「设置 → 故障排除」里的全屏日志页（req-3/5）。
  */
 @Composable
 fun AppDialogs(spec: DialogSpec, vm: HyperVolumeViewModel) {
@@ -127,44 +119,5 @@ fun AppDialogs(spec: DialogSpec, vm: HyperVolumeViewModel) {
                 PrimaryButton(text = stringResource(R.string.dlg_close), onClick = dismiss)
             }
         }
-
-        is DialogSpec.Logs -> LogsDialog(text = spec.text, vm = vm, dismiss = dismiss)
     }
-}
-
-/** 模块日志框：等宽可滚动正文 + 复制 / 清理 / 关闭。 */
-@Composable
-private fun LogsDialog(text: String, vm: HyperVolumeViewModel, dismiss: () -> Unit) {
-    val context = LocalContext.current
-    val copied = stringResource(R.string.toast_log_copied)
-    OverlayDialog(
-        show = true,
-        title = StatusProbe.LOG_TITLE,
-        onDismissRequest = dismiss,
-    ) {
-        MonoText(
-            text = text,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 380.dp)
-                .verticalScroll(rememberScrollState()),
-        )
-        DialogButtons {
-            SecondaryButton(
-                text = stringResource(R.string.dlg_copy),
-                onClick = {
-                    copyLog(context, text)
-                    vm.notify(copied)
-                },
-            )
-            SecondaryButton(text = stringResource(R.string.dlg_clear), onClick = vm::clearLogs)
-            PrimaryButton(text = stringResource(R.string.dlg_close), onClick = dismiss)
-        }
-    }
-}
-
-/** 复制日志到系统剪贴板。 */
-private fun copyLog(context: Context, text: String) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-    clipboard.setPrimaryClip(ClipData.newPlainText(StatusProbe.LOG_TITLE, text))
 }

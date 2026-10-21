@@ -1,5 +1,7 @@
 package com.xiefeihong.hypervolume.app
 
+import com.xiefeihong.hypervolume.R
+import com.xiefeihong.hypervolume.core.AppText
 import com.xiefeihong.hypervolume.core.Avrcp
 import com.xiefeihong.hypervolume.core.DeviceConfig
 import com.xiefeihong.hypervolume.core.OutputDevice
@@ -26,8 +28,9 @@ import kotlinx.coroutines.withContext
  *  - 是否需重启蓝牙：仅蓝牙模式变化影响 AVRCP 协商（有线/外放经 Hook 实时读配置，无需重启）；
  *  - 只重启系统框架时不再单独重启蓝牙（蓝牙进程随框架重启）。
  *
- * 动态文案在本层以中文字面量生成（与 [PreviewBuilder]、[StatusProbe] 同一口径），
- * 使单测不依赖 R 资源；静态标签留给界面层。
+ * 动态文案在本层经 [com.xiefeihong.hypervolume.core.AppText] 按资源生成（与 [PreviewBuilder]、
+ * [StatusProbe] 同一口径），因此随语言切换；单测注入解析 `values/strings.xml` 的取值器
+ * 即可继续直接断言中文，不依赖 Android 运行时。
  */
 class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe) {
 
@@ -244,48 +247,49 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
     /** 保存流程的动态文案（旧 `strings.xml` 中的对话框/Toast 内容，逐条对应）。 */
     object Messages {
 
-        const val saveNeedSystemDefaultTitle = "无法可靠调整档位"
-        const val saveTitle = "保存修改"
-        const val saveNone = "没有需要保存的修改。"
-        const val saveFirst = "首次保存，将写入以下配置并使其生效："
-        const val saveConfirm = "保存"
-        const val cancel = "取消"
-        const val resolveEnable = "启用档位修改"
-        const val resolveDefaultMode = "使用默认模式"
-        const val resolveDefaultSteps = "使用档位默认值"
-        const val pushFail = "写入系统配置失败，请确认 su 已授权"
-        const val autoSaveFail = "自动保存失败：无法写入系统配置，请确认 su 已授权"
-        const val saveDone = "已保存，无需重启即可生效。"
-        const val saveDoneTitle = "保存成功"
-        const val restartNow = "立即重启"
-        const val restartLater = "稍后手动"
-        const val restarting = "正在重启…"
-        const val btRestarting = "正在重启蓝牙"
-        const val btRestartFail = "蓝牙重启命令执行失败（svc / cmd 均不可用）"
-        const val sysRestarting = "正在重启系统框架…屏幕将短暂黑屏，本应用会被关闭"
-        const val clearDataTitle = "清除数据"
-        const val clearDataMsg = "已恢复系统默认。是否同时清除此应用写入的所有数据（配置与日志）？"
-        const val clearDataConfirm = "清除"
-        const val dataCleared = "已清除应用配置与日志。"
-        const val restartSystemTitle = "重启系统框架"
-        const val restartSystemMsg = "将重启系统框架 (类似重启)，使档位生效。"
-        const val restartSystemConfirm = "继续"
-        const val pendingUnsaved = "● 有未保存的修改，点击「保存修改」后生效。"
+        val saveNeedSystemDefaultTitle: String get() = AppText.str(R.string.save_need_default_title)
+        val saveTitle: String get() = AppText.str(R.string.save_title)
+        val saveNone: String get() = AppText.str(R.string.save_none)
+        val saveFirst: String get() = AppText.str(R.string.save_first)
+        val saveConfirm: String get() = AppText.str(R.string.save_confirm)
+        val cancel: String get() = AppText.str(R.string.cancel)
+        val resolveEnable: String get() = AppText.str(R.string.resolve_enable)
+        val resolveDefaultMode: String get() = AppText.str(R.string.resolve_default_mode)
+        val resolveDefaultSteps: String get() = AppText.str(R.string.resolve_default_steps)
+        val pushFail: String get() = AppText.str(R.string.push_fail)
+        val autoSaveFail: String get() = AppText.str(R.string.auto_save_fail)
+        val saveDone: String get() = AppText.str(R.string.save_done)
+        val saveDoneTitle: String get() = AppText.str(R.string.save_done_title)
+        val restartNow: String get() = AppText.str(R.string.restart_now)
+        val restartLater: String get() = AppText.str(R.string.restart_later)
+        val restarting: String get() = AppText.str(R.string.restarting)
+        val btRestarting: String get() = AppText.str(R.string.bt_restarting)
+        val btRestartFail: String get() = AppText.str(R.string.bt_restart_fail)
+        val sysRestarting: String get() = AppText.str(R.string.sys_restarting)
+        val clearDataTitle: String get() = AppText.str(R.string.clear_data_title)
+        val clearDataMsg: String get() = AppText.str(R.string.clear_data_msg)
+        val clearDataConfirm: String get() = AppText.str(R.string.clear_data_confirm)
+        val dataCleared: String get() = AppText.str(R.string.data_cleared)
+        val restartSystemTitle: String get() = AppText.str(R.string.restart_system_title)
+        val restartSystemMsg: String get() = AppText.str(R.string.restart_system_msg)
+        val restartSystemConfirm: String get() = AppText.str(R.string.restart_system_confirm)
+        val pendingUnsaved: String get() = AppText.str(R.string.pending_unsaved)
 
         /** 门控警告正文：嵌入当前非默认模式名。 */
         fun saveNeedSystemDefault(modeShort: String): String =
-            "⚠ 当前「启用档位修改」已关闭且处于${modeShort}模式（非默认），" +
-                "但未获取到系统默认音量档位，无法可靠调整档位。请选择处理方式："
+            AppText.str(R.string.save_need_default_body, modeShort)
 
         /** 重启询问正文中「重启什么」的成分名。 */
-        fun restartWhat(restartBt: Boolean, restartSystem: Boolean): String = when {
-            restartBt && restartSystem -> "蓝牙与系统框架"
-            restartBt -> "蓝牙"
-            else -> "系统框架"
-        }
+        fun restartWhat(restartBt: Boolean, restartSystem: Boolean): String = AppText.str(
+            when {
+                restartBt && restartSystem -> R.string.restart_what_both
+                restartBt -> R.string.restart_what_bt
+                else -> R.string.restart_what_sys
+            },
+        )
 
         fun restartNowMsg(restartBt: Boolean, restartSystem: Boolean): String =
-            "改动已保存。需重启${restartWhat(restartBt, restartSystem)}才能生效，是否立即重启？"
+            AppText.str(R.string.restart_now_msg, restartWhat(restartBt, restartSystem))
     }
 }
 
@@ -359,13 +363,13 @@ internal fun describeChanges(base: VolumeConfig?, pending: VolumeConfig): List<S
     }
     val out = mutableListOf<String>()
     if (base.enabled != pending.enabled) {
-        out.add("启用档位修改：" + enabledLabel(base.enabled) + " → " + enabledLabel(pending.enabled))
+        out.add(AppText.str(R.string.change_enabled, enabledLabel(base.enabled), enabledLabel(pending.enabled)))
     }
     if (base.mediaSteps != pending.mediaSteps) {
-        out.add("档位：" + base.mediaSteps + " → " + pending.mediaSteps)
+        out.add(AppText.str(R.string.change_steps, base.mediaSteps, pending.mediaSteps))
     }
     if (base.keySteps != pending.keySteps) {
-        out.add("音量键步进：" + base.keySteps + " → " + pending.keySteps)
+        out.add(AppText.str(R.string.change_key_steps, base.keySteps, pending.keySteps))
     }
     appendDeviceChanges(out, deviceTabLabel(OutputDevice.BT), base.bluetooth, pending.bluetooth)
     appendDeviceChanges(out, deviceTabLabel(OutputDevice.WIRED), base.wired, pending.wired)
@@ -376,35 +380,44 @@ internal fun describeChanges(base: VolumeConfig?, pending: VolumeConfig): List<S
 /** 追加单设备的模式改动 + A/B/默认 三套范围改动条目（前缀设备名）。 */
 internal fun appendDeviceChanges(out: MutableList<String>, name: String, from: DeviceConfig, to: DeviceConfig) {
     if (from.mode != to.mode) {
-        out.add("$name 模式：${modeLabelShort(from.mode)} → ${modeLabelShort(to.mode)}")
+        out.add(AppText.str(R.string.change_mode, name, modeLabelShort(from.mode), modeLabelShort(to.mode)))
     }
-    addRangeChange(out, "$name·绝对音量", from.absolute, to.absolute)
-    addRangeChange(out, "$name·相对音量", from.software, to.software)
-    addRangeChange(out, "$name·默认", from.defaultRange, to.defaultRange)
+    addRangeChange(out, AppText.str(R.string.range_suffix_absolute, name), from.absolute, to.absolute)
+    addRangeChange(out, AppText.str(R.string.range_suffix_software, name), from.software, to.software)
+    addRangeChange(out, AppText.str(R.string.range_suffix_default, name), from.defaultRange, to.defaultRange)
 }
 
 private fun addRangeChange(out: MutableList<String>, name: String, from: Range?, to: Range?) {
     if (from == to) {
         return
     }
-    out.add("$name：${rangeLabel(from)} → ${rangeLabel(to)}")
+    out.add(AppText.str(R.string.change_range, name, rangeLabel(from), rangeLabel(to)))
 }
 
 private fun rangeLabel(range: Range?): String =
-    if (range == null) "未设置" else "${range.min}~${range.max}/${Avrcp.curveLabel(range.curve)}"
+    if (range == null) {
+        AppText.str(R.string.range_unset)
+    } else {
+        AppText.str(R.string.range_value, range.min, range.max, Avrcp.curveLabel(range.curve))
+    }
 
-private fun enabledLabel(enabled: Boolean): String = if (enabled) "开启" else "关闭"
+private fun enabledLabel(enabled: Boolean): String =
+    AppText.str(if (enabled) R.string.enabled_on else R.string.enabled_off)
 
 /** 对话框用的模式简名：绝对→「绝对音量」、相对→「相对音量」、默认→「默认」。 */
-internal fun modeLabelShort(mode: Int): String = when (mode) {
-    Prefs.BT_MODE_SOFTWARE -> "相对音量"
-    Prefs.BT_MODE_DEFAULT -> "默认"
-    else -> "绝对音量"
-}
+internal fun modeLabelShort(mode: Int): String = AppText.str(
+    when (mode) {
+        Prefs.BT_MODE_SOFTWARE -> R.string.mode_software
+        Prefs.BT_MODE_DEFAULT -> R.string.mode_default
+        else -> R.string.mode_absolute
+    },
+)
 
 /** 设备选项卡名：与界面标签一致（蓝牙 / 有线耳机 / 外放）。 */
-internal fun deviceTabLabel(device: OutputDevice): String = when (device) {
-    OutputDevice.BT -> "蓝牙"
-    OutputDevice.WIRED -> "有线耳机"
-    OutputDevice.SPEAKER -> "外放"
-}
+internal fun deviceTabLabel(device: OutputDevice): String = AppText.str(
+    when (device) {
+        OutputDevice.BT -> R.string.device_bt
+        OutputDevice.WIRED -> R.string.device_wired
+        OutputDevice.SPEAKER -> R.string.device_speaker
+    },
+)

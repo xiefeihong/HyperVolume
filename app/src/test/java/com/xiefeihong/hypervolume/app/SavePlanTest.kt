@@ -1,5 +1,6 @@
 package com.xiefeihong.hypervolume.app
 
+import com.xiefeihong.hypervolume.TextBackedTest
 import com.xiefeihong.hypervolume.core.DeviceConfig
 import com.xiefeihong.hypervolume.core.OutputDevice
 import com.xiefeihong.hypervolume.core.Prefs
@@ -13,7 +14,7 @@ import org.junit.Test
  * 保存改动清单（[describeChanges]）与对话框文案的 JVM 单元测试：
  * 逐条对应旧 `SaveFlow.describeChanges` 的 `strings.xml` 格式串。
  */
-class SavePlanTest {
+class SavePlanTest : TextBackedTest() {
 
     private val fullAbs = Range(0, Prefs.AVRCP_MAX_VOLUME, Prefs.CURVE_TYPE_DEFAULT)
     private val fullSoft = Range(0, Prefs.MEDIA_STEPS_MAX, Prefs.CURVE_LINEAR)

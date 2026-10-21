@@ -109,6 +109,8 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
 
     testImplementation(libs.junit)
+    // org.json 在 android.jar 里是桩件（returnDefaultValues 下全返默认值），备份编解码需真实实现
+    testImplementation(libs.json)
 }
 
 /**

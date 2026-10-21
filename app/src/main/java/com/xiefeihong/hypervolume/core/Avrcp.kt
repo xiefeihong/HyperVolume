@@ -1,5 +1,6 @@
 package com.xiefeihong.hypervolume.core
 
+import com.xiefeihong.hypervolume.R
 import java.util.Locale
 import kotlin.math.ln
 import kotlin.math.max
@@ -71,11 +72,18 @@ object Avrcp {
         return intArrayOf(min(lo, hi), hi)
     }
 
-    /** 曲线类型名称（预览与日志用）。 */
+    /** 曲线类型名称（预览与界面文案用，随语言切换）。 */
     fun curveLabel(curveType: Int): String = when (curveType) {
-        Prefs.CURVE_LINEAR -> "线性"
-        Prefs.CURVE_SQRT -> "平方根"
-        else -> "对数"
+        Prefs.CURVE_LINEAR -> AppText.str(R.string.curve_short_linear)
+        Prefs.CURVE_SQRT -> AppText.str(R.string.curve_short_sqrt)
+        else -> AppText.str(R.string.curve_short_log)
+    }
+
+    /** 曲线类型的稳定机器名：Hook 进程（蓝牙 / system_server）日志用，与界面语言无关。 */
+    fun curveKey(curveType: Int): String = when (curveType) {
+        Prefs.CURVE_LINEAR -> "linear"
+        Prefs.CURVE_SQRT -> "sqrt"
+        else -> "log"
     }
 
     /**
@@ -212,25 +220,19 @@ object Avrcp {
         return duplicates
     }
 
-    /** 预览「✓/⚠ 各次按键是否重复」判重块：三模式共用。okUnit/dupUnit 分别嵌入 ✓/⚠ 句，输出逐字不变。 */
-    private fun appendKeyStepDupHint(sb: StringBuilder, dups: Int, okUnit: String, dupUnit: String) {
+    /** 预览「✓/⚠ 各次按键是否重复」判重块：整句按单位分条资源化（AVRCP 口径 / 系统档位口径）。 */
+    private fun appendKeyStepDupHint(sb: StringBuilder, dups: Int, avrcpUnit: Boolean) {
         if (dups == 0) {
-            sb.append("✓ 各次按键的").append(okUnit).append("互不相同\n")
+            sb.append(AppText.str(if (avrcpUnit) R.string.hint_dup_ok_avrcp else R.string.hint_dup_ok_sys))
         } else {
-            sb.append("⚠ 有 ").append(dups)
-                .append(" 次相邻按键落到相同").append(dupUnit)
-                .append("（可增大按键段数使每次跳更小）\n")
+            sb.append(AppText.str(if (avrcpUnit) R.string.hint_dup_many_avrcp else R.string.hint_dup_many_sys, dups))
         }
     }
 
-    /** 预览「第 1 档 → …」行 + 可闻下限提示：模式B/默认共用（百分比口径）。stepLine 需自带结尾换行。 */
+    /** 预览「第 1 档 → …」行 + 可闻下限提示：[stepLine] 由调用方整句给出（自带结尾换行）。 */
     private fun appendAudibleHint(sb: StringBuilder, stepLine: String, percent: Int, thresholdPct: Int) {
         sb.append(stepLine)
-        if (percent <= thresholdPct) {
-            sb.append("⚠ 低于部分耳机可闻下限，低音量可能无声\n")
-        } else {
-            sb.append("✓ 已高于常见可闻下限\n")
-        }
+        sb.append(AppText.str(if (percent <= thresholdPct) R.string.hint_low_warn else R.string.hint_low_ok))
     }
 
     /**
@@ -246,7 +248,7 @@ object Avrcp {
     @JvmStatic
     fun buildPreview(maxSteps: Int, btMode: Int, minAbs: Int, maxAbs: Int, curveType: Int, keySteps: Int): String {
         if (maxSteps <= 0) {
-            return "暂无数据"
+            return AppText.str(R.string.pv_no_data)
         }
         return if (btMode == Prefs.BT_MODE_SOFTWARE) {
             buildSoftwarePreview(maxSteps, minAbs, maxAbs, curveType, keySteps)
@@ -273,26 +275,16 @@ object Avrcp {
             0
         }
 
-        sb.append("绝对音量模式：保持绝对音量 · ").append(curveLabel(curveType)).append("曲线\n")
-        sb.append("媒体 ").append(maxSteps).append(" 档 → 蓝牙 AVRCP（0~127），范围 ")
-            .append(range[0]).append('~').append(range[1]).append("\n")
-        appendKeyStepDupHint(sb, duplicates, " AVRCP 值", " AVRCP 值")
-        sb.append("第 1 档 → AVRCP ").append(lowest)
-            .append("（约 ").append(lowestPercent).append("%）\n")
-        if (lowest <= ABS_LOW_FLOOR) {
-            sb.append("⚠ 低于部分耳机可闻下限，低音量可能无声\n")
-        } else {
-            sb.append("✓ 已高于常见可闻下限\n")
-        }
+        sb.append(AppText.str(R.string.pv_abs_header, curveLabel(curveType)))
+        sb.append(AppText.str(R.string.pv_abs_range, maxSteps, range[0], range[1]))
+        appendKeyStepDupHint(sb, duplicates, avrcpUnit = true)
+        sb.append(AppText.str(R.string.pv_abs_first, lowest, lowestPercent))
+        sb.append(AppText.str(if (lowest <= ABS_LOW_FLOOR) R.string.hint_low_warn else R.string.hint_low_ok))
         if (maxSteps >= 2) {
-            sb.append("低音量区间距：第 1→2 档相差 ").append(spacing).append("\n")
-            if (spacing < ABS_SPACING_MIN) {
-                sb.append("⚠ 偏小，耳机粒度粗时可能听感相同，建议减少档位数或改用模式B\n")
-            } else {
-                sb.append("✓ 低音量区不易重复\n")
-            }
+            sb.append(AppText.str(R.string.pv_abs_spacing, spacing))
+            sb.append(AppText.str(if (spacing < ABS_SPACING_MIN) R.string.pv_abs_spacing_small else R.string.pv_abs_spacing_ok))
         }
-        sb.append("提示：耳机内部有效档位较少时（常见 8~19），手机档位多于它仍会重复；模式B 可彻底解决")
+        sb.append(AppText.str(R.string.pv_abs_tip))
         return sb.toString()
     }
 
@@ -304,20 +296,19 @@ object Avrcp {
         val lowestPercent = (lowest * 100.0 / maxSteps).roundToInt()
 
         val sb = StringBuilder()
-        sb.append("相对音量模式：停用绝对音量 · ").append(curveLabel(curveType)).append("曲线\n")
-        sb.append("档位直接映射为系统音量档位，范围 ")
-            .append(lowest).append('~').append(maxStep).append("（共 ").append(maxSteps).append(" 档）\n")
+        sb.append(AppText.str(R.string.pv_soft_header, curveLabel(curveType)))
+        sb.append(AppText.str(R.string.pv_soft_range, lowest, maxStep, maxSteps))
 
         val dups = countDuplicateAtKeySteps(maxSteps, keySteps) { level ->
             curveToSystemIndex(level, maxSteps, minStep, maxStep, curveType)
         }
-        appendKeyStepDupHint(sb, dups, "系统音量档位", "系统档位")
+        appendKeyStepDupHint(sb, dups, avrcpUnit = false)
         appendAudibleHint(
             sb,
-            "第 1 档 → 系统档位 $lowest/$maxSteps（约 $lowestPercent%）\n",
+            AppText.str(R.string.pv_first_sys_step, lowest, maxSteps, lowestPercent),
             lowestPercent, LOW_FLOOR_PCT,
         )
-        sb.append("提示：耳机音量请用耳机自身的音量键调整；耳机端音量同步显示会失效（正常现象）")
+        sb.append(AppText.str(R.string.pv_soft_tip))
         return sb.toString()
     }
 
@@ -337,7 +328,7 @@ object Avrcp {
         maxSteps: Int, minStep: Int, maxStep: Int, keySteps: Int, nativeGainDb: FloatArray?,
     ): String {
         if (maxSteps <= 0) {
-            return "暂无数据"
+            return AppText.str(R.string.pv_no_data)
         }
         val lo = min(minStep, maxStep)
         val hi = max(minStep, maxStep)
@@ -350,30 +341,22 @@ object Avrcp {
         val lowestPercent = (lowest * 100.0 / maxSteps).roundToInt()
 
         val sb = StringBuilder()
-        sb.append("默认模式：系统档位线性映射 · ROM 原生曲线\n")
-        sb.append("媒体 ").append(maxSteps).append(" 档 → 系统档位（0~").append(maxSteps)
-            .append("）线性等分，范围 ").append(lo).append('~').append(hi)
-            .append("（约 ").append(loPct).append("%~").append(hiPct).append("%）\n")
-        appendKeyStepDupHint(sb, dups, "系统音量档位", "系统档位")
+        sb.append(AppText.str(R.string.pv_default_header))
+        sb.append(AppText.str(R.string.pv_default_range, maxSteps, maxSteps, lo, hi, loPct, hiPct))
+        appendKeyStepDupHint(sb, dups, avrcpUnit = false)
         appendAudibleHint(
             sb,
-            "第 1 档 → 系统档位 $lowest/$maxSteps（约 $lowestPercent%）\n",
+            AppText.str(R.string.pv_first_sys_step, lowest, maxSteps, lowestPercent),
             lowestPercent, LOW_FLOOR_PCT,
         )
         if (maxSteps >= 2 && nativeGainDb != null && nativeGainDb.size > 2) {
             val idx2 = defaultRangeToIndex(2, maxSteps, lo, hi)
             val dbGap = nativeGainDb[min(idx2, nativeGainDb.size - 1)] -
                 nativeGainDb[min(lowest, nativeGainDb.size - 1)]
-            sb.append("低音量区间距：第 1→2 档相差 ")
-                .append(String.format(Locale.US, "%.1f", dbGap)).append(" dB\n")
-            if (dbGap < DEFAULT_DB_GAP_MIN) {
-                sb.append("⚠ 差值过小，相邻档位听感几乎相同，建议减少档位数\n")
-            } else {
-                sb.append("✓ 低音量区档位可分辨\n")
-            }
+            sb.append(AppText.str(R.string.pv_default_spacing, String.format(Locale.US, "%.1f", dbGap)))
+            sb.append(AppText.str(if (dbGap < DEFAULT_DB_GAP_MIN) R.string.pv_default_spacing_small else R.string.pv_default_spacing_ok))
         }
-        sb.append("提示：两端锚到 min/max、中间保持 ROM 原生响度曲线（满量程即直通）；")
-            .append("下方曲线图横轴为系统档位、纵轴为按 dB 归一的相对增益（0~100%）。")
+        sb.append(AppText.str(R.string.pv_default_tip))
         return sb.toString()
     }
 
@@ -392,11 +375,15 @@ object Avrcp {
             return ""
         }
         val segs = Prefs.clampKeySteps(keySteps)
-        val column = if (useSystemIndex) "系统音量档位（0~$maxSteps）" else "AVRCP 音量（0~127）"
+        val column = if (useSystemIndex) {
+            AppText.str(R.string.table_col_sys, maxSteps)
+        } else {
+            AppText.str(R.string.table_col_avrcp)
+        }
         val valueMax = if (useSystemIndex) maxSteps else Prefs.AVRCP_MAX_VOLUME
         val cellFmt = "%" + max(2, segs.toString().length) + "d→%" +
             max(2, valueMax.toString().length) + "d"
-        return renderKeyPressTable("按键次数 → $column，共 $segs 次：\n", maxSteps, keySteps, perLine) { press, level ->
+        return renderKeyPressTable(AppText.str(R.string.table_press_title, column, segs), maxSteps, keySteps, perLine) { press, level ->
             val value = if (useSystemIndex) {
                 curveToSystemIndex(level, maxSteps, minAbs, maxAbs, curveType)
             } else {
@@ -428,9 +415,9 @@ object Avrcp {
         }
         val segs = Prefs.clampKeySteps(keySteps)
         val title = if (showDb) {
-            "按键次数 → 增益（dB，硬件阶梯），共 $segs 次：\n"
+            AppText.str(R.string.table_native_db_title, segs)
         } else {
-            "按键次数 → 相对增益（按dB归一 0~100%），共 $segs 次：\n"
+            AppText.str(R.string.table_native_pct_title, segs)
         }
         val cellFmt = "%" + max(2, segs.toString().length) + "d→" + if (showDb) "%6.1f" else "%3d%%"
         return renderKeyPressTable(title, steps, keySteps, perLine) { press, level ->
@@ -460,9 +447,9 @@ object Avrcp {
         val sb = StringBuilder()
         sb.append(
             if (showDb) {
-                "档位百分比 → 增益（dB，硬件阶梯），共 ${anchorPct.size} 点：\n"
+                AppText.str(R.string.table_percent_db_title, anchorPct.size)
             } else {
-                "档位百分比 → 相对增益（按dB归一 0~100%），共 ${anchorPct.size} 点：\n"
+                AppText.str(R.string.table_percent_pct_title, anchorPct.size)
             },
         )
         val cellFmt = "%${pctWidth}d%%→" + if (showDb) "%6.1f  " else "%3d%%  "

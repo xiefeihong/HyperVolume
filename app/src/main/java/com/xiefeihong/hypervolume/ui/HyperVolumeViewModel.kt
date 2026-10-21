@@ -1,22 +1,36 @@
 package com.xiefeihong.hypervolume.ui
 
 import android.app.Application
+import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.xiefeihong.hypervolume.R
+import com.xiefeihong.hypervolume.app.AppLanguage
+import com.xiefeihong.hypervolume.app.BackupContent
+import com.xiefeihong.hypervolume.app.BackupEngine
 import com.xiefeihong.hypervolume.app.BlockedChoice
 import com.xiefeihong.hypervolume.app.ConfigStore
+import com.xiefeihong.hypervolume.app.DebugInfoCollector
+import com.xiefeihong.hypervolume.app.DebugSnapshot
 import com.xiefeihong.hypervolume.app.EditorState
 import com.xiefeihong.hypervolume.app.FollowUp
 import com.xiefeihong.hypervolume.app.NativeAxis
 import com.xiefeihong.hypervolume.app.SaveAndRestart
 import com.xiefeihong.hypervolume.app.SaveEngine
 import com.xiefeihong.hypervolume.app.SavePlan
+import com.xiefeihong.hypervolume.app.SettingsStore
 import com.xiefeihong.hypervolume.app.StatusInput
 import com.xiefeihong.hypervolume.app.StatusProbe
 import com.xiefeihong.hypervolume.app.StatusSnapshot
+import com.xiefeihong.hypervolume.app.ThemeMode
+import com.xiefeihong.hypervolume.app.UpdateChecker
+import com.xiefeihong.hypervolume.core.AppText
 import com.xiefeihong.hypervolume.core.NativeVolumeCurve
 import com.xiefeihong.hypervolume.core.OutputDevice
+import com.xiefeihong.hypervolume.core.Prefs
+import com.xiefeihong.hypervolume.core.Shell
+import com.xiefeihong.hypervolume.core.VolumeConfig
 import com.xiefeihong.hypervolume.core.VolumeMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -28,6 +42,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.IOException
 
 /**
  * 界面状态容器（替代旧 `MainActivity` 这个「控件宿主」）。
@@ -44,6 +59,12 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
     private val store = ConfigStore(application)
     private val probe = StatusProbe(application, store)
     private val engine = SaveEngine(store, probe)
+    private val settings = SettingsStore(application)
+    private val backup = BackupEngine(application, settings)
+    private val debugCollector = DebugInfoCollector(application, store, probe)
+
+    /** 构造参数只在属性初始化器内可见，SAF 读写与版本查询等成员函数需自持一份上下文。 */
+    private val appContext: Application = application
 
     private val _state: MutableStateFlow<UiState>
     val state: StateFlow<UiState> get() = _state.asStateFlow()
@@ -61,7 +82,13 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
             detectedDevice = probe.detectCurrentDevice(),
         )
         _state = MutableStateFlow(
-            UiState(editor = cold.markSaved(cold.model.toXml()), status = null),
+            UiState(
+                editor = cold.markSaved(cold.model.toXml()),
+                status = null,
+                language = settings.language,
+                themeMode = settings.themeMode,
+                settingsTab = settings.settingsTab,
+            ),
         )
         refreshStatus()
         // 后台读取 ROM audio policy 媒体曲线（root），完成后让默认设备以真实曲线重绘。
@@ -145,7 +172,7 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
                     keepDevice = editor.editingDevice,
                 )
                 editor = reloaded.markSaved(reloaded.model.toXml())
-                notify("已从系统读取现有配置并恢复界面")
+                notify(AppText.str(R.string.config_adopted))
             }
             _state.update { it.copy(status = snapshot, editor = editor) }
         }
@@ -253,22 +280,212 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
         refreshStatus()
     }
 
-    // ==================== 模块日志 ====================
+    // ==================== 模块日志 / 调试信息（全屏子页） ====================
 
-    /** 读取并展示模块日志。 */
-    fun showLogs() {
-        launchBusy {
-            val text = withContext(Dispatchers.IO) { probe.readModuleLogs() }
-            setDialog(DialogSpec.Logs(if (text.isEmpty()) StatusProbe.LOG_EMPTY else text))
+    /** 进入全屏子页；日志与调试页首次进入时懒加载一次。 */
+    fun openRoute(route: AppRoute) {
+        _state.update { it.copy(route = route) }
+        when (route) {
+            AppRoute.LOGS -> if (_state.value.logs == null) reloadLogs()
+            AppRoute.DEBUG -> if (_state.value.debug == null) reloadDebug()
+            else -> Unit
         }
     }
 
-    /** 清理模块自写日志文件（日志框的「清理」按钮）。 */
+    /** 退出子页（顶栏返回 / 系统返回键）。 */
+    fun closeRoute() = _state.update { it.copy(route = AppRoute.NONE) }
+
+    /** 读取模块日志（root 阻塞，切 IO）；空日志回落排查提示文案。 */
+    fun reloadLogs() {
+        _state.update { it.copy(logLoading = true) }
+        viewModelScope.launch {
+            val text = withContext(Dispatchers.IO) { probe.readModuleLogs() }
+            _state.update {
+                it.copy(logs = if (text.isEmpty()) StatusProbe.logEmpty() else text, logLoading = false)
+            }
+        }
+    }
+
+    /** 清理模块自写日志文件（日志页「清理」按钮），清完立即回读。 */
     fun clearLogs() {
         launchBusy {
             withContext(Dispatchers.IO) { probe.clearModuleLogs() }
-            setDialog(DialogSpec.None)
-            notify("日志文件已清理")
+            notify(AppText.str(R.string.logs_cleared))
+            reloadLogs()
+        }
+    }
+
+    /** 收集调试信息快照（故障排除页与关于页设备信息共用一份）。 */
+    fun reloadDebug() {
+        _state.update { it.copy(debugLoading = true) }
+        viewModelScope.launch {
+            val outcome = withContext(Dispatchers.IO) {
+                runCatching { debugCollector.collect(Shell.isRootAvailable()) }
+            }
+            outcome.fold(
+                onSuccess = { snapshot -> _state.update { it.copy(debug = snapshot, debugLoading = false) } },
+                onFailure = { t ->
+                    _state.update { it.copy(debugLoading = false) }
+                    notify(AppText.str(R.string.action_failed, t.message ?: t.javaClass.simpleName))
+                },
+            )
+        }
+    }
+
+    // ==================== 通用设置（语言 / 颜色 / 设置页标签） ====================
+
+    /** 选择界面语言；返回是否真的变更（变更才需重建 Activity 以切换资源）。 */
+    fun onLanguage(index: Int): Boolean {
+        val next = AppLanguage.entries.getOrNull(index) ?: return false
+        if (next == _state.value.language) return false
+        settings.language = next
+        _state.update { it.copy(language = next) }
+        return true
+    }
+
+    /** 选择颜色模式（Miuix 主题可即时切换，无需重建界面）。 */
+    fun onThemeMode(index: Int) {
+        val next = ThemeMode.entries.getOrNull(index) ?: return
+        settings.themeMode = next
+        _state.update { it.copy(themeMode = next) }
+    }
+
+    fun onSettingsTab(index: Int) {
+        _state.update { it.copy(settingsTab = index) }
+        settings.settingsTab = index
+    }
+
+    // ==================== 备份与恢复 ====================
+
+    /** 导出：本地偏好 + 系统侧生效配置编成 JSON，写入 SAF 选定的 [uri]。 */
+    fun exportBackup(uri: Uri) {
+        launchBusy {
+            val effective = withContext(Dispatchers.IO) {
+                if (Shell.isRootAvailable()) {
+                    // `settings get global <key>` 无值时回显字面 null，归一为空串
+                    Shell.getGlobalConfig(Prefs.GLOBAL_KEY).output.trim()
+                        .let { if (it.isEmpty() || it == "null") "" else it }
+                } else {
+                    ""
+                }
+            }
+            val records = settings.allPreferences().size
+            val json = backup.export(effective)
+            val written = runCatching { withContext(Dispatchers.IO) { writeText(uri, json) } }
+            written.fold(
+                onSuccess = { notify(AppText.str(R.string.backup_export_ok, records)) },
+                onFailure = { t ->
+                    notify(AppText.str(R.string.backup_export_fail, t.message ?: t.javaClass.simpleName))
+                },
+            )
+        }
+    }
+
+    /**
+     * 导入：解析存档 → 写回本地偏好 → 把备份时的生效配置回写系统（需 root）→ 重载界面。
+     *
+     * 存档非法只提示「不是有效的备份文件」，不改动任何现有配置。
+     */
+    fun importBackup(uri: Uri) {
+        launchBusy {
+            // 读取与解析合入一个 runCatching：抛 IllegalArgumentException = 存档格式不合
+            val outcome = runCatching {
+                val text = withContext(Dispatchers.IO) { readText(uri) }
+                backup.parse(text)
+            }
+            outcome.fold(
+                onSuccess = { content -> applyBackup(content) },
+                onFailure = { t ->
+                    notify(
+                        if (t is IllegalArgumentException) {
+                            AppText.str(R.string.backup_import_fail)
+                        } else {
+                            AppText.str(R.string.backup_import_error, t.message ?: t.javaClass.simpleName)
+                        },
+                    )
+                },
+            )
+        }
+    }
+
+    /** 导入后半段：写回本地偏好 → 回写系统（需 root）→ 重载界面并提示。 */
+    private suspend fun applyBackup(content: BackupContent) {
+        backup.applyPreferences(content)
+        val restored = VolumeConfig.fromXml(content.effectiveXml)
+        var baseline = ""
+        if (restored != null && withContext(Dispatchers.IO) { Shell.isRootAvailable() }) {
+            val push = engine.pushConfig(restored)
+            baseline = if (push.verified) push.configXml else ""
+            if (!push.verified) notify(SaveEngine.Messages.pushFail)
+        }
+        reloadAfterRestore(baseline)
+        notify(AppText.str(R.string.backup_import_ok, content.recordCount))
+        if (baseline.isNotEmpty()) notify(AppText.str(R.string.backup_imported_restart))
+    }
+
+    /**
+     * 导入后重载界面：暂存区已是备份内容，基线取回写成功的生效 XML
+     * （回写失败/无 root 时基线为空串 → 界面如实提示「有未保存的修改」）。
+     */
+    private suspend fun reloadAfterRestore(baselineXml: String) {
+        val systemDefault = withContext(Dispatchers.IO) { probe.systemDefaultSteps() }
+        val editor = EditorState.load(
+            store = store,
+            systemDefaultSteps = systemDefault,
+            detectedDevice = null,
+            keepDevice = _state.value.editor.editingDevice,
+        )
+        _state.update {
+            it.copy(
+                editor = editor.markSaved(baselineXml),
+                language = settings.language,
+                themeMode = settings.themeMode,
+            )
+        }
+        refreshStatus()
+    }
+
+    // ==================== 关于页：检查更新 ====================
+
+    /**
+     * 拉取 GitHub 最新 Release 并与当前 versionName 比对：
+     * 有新版弹提示框（含更新说明与发布时间），网络失败仅提示（不弹框）。
+     */
+    fun checkUpdate() {
+        launchBusy {
+            notify(AppText.str(R.string.update_checking))
+            val current = versionName()
+            val outcome = withContext(Dispatchers.IO) { runCatching { UpdateChecker.latest() } }
+            outcome.fold(
+                onSuccess = { release ->
+                    if (UpdateChecker.isNewer(release.tag, current)) {
+                        setDialog(
+                            DialogSpec.Notice(
+                                title = AppText.str(R.string.update_found, release.tag, current),
+                                text = buildString {
+                                    if (release.notes.isNotBlank()) {
+                                        append(AppText.str(R.string.update_notes, release.notes)).append("\n")
+                                    }
+                                    if (release.publishedAt.isNotBlank()) {
+                                        append(AppText.str(R.string.update_time, release.publishedAt))
+                                    }
+                                },
+                            ),
+                        )
+                    } else {
+                        notify(AppText.str(R.string.update_latest, current))
+                    }
+                },
+                onFailure = { t ->
+                    notify(
+                        if (t is IOException) {
+                            AppText.str(R.string.update_network_fail)
+                        } else {
+                            AppText.str(R.string.update_failed, t.message ?: t.javaClass.simpleName)
+                        },
+                    )
+                },
+            )
         }
     }
 
@@ -305,12 +522,29 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
                 block()
             } catch (t: Throwable) {
                 Log.w(StatusProbe.LOG_TAG, "action failed", t)
-                notify("操作失败：${t.message ?: t.javaClass.simpleName}")
+                notify(AppText.str(R.string.action_failed, t.message ?: t.javaClass.simpleName))
             } finally {
                 _state.update { it.copy(busy = false) }
             }
         }
     }
+
+    /** 当前模块 versionName（检查更新比对基准）。 */
+    private fun versionName(): String = runCatching {
+        appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName
+    }.getOrNull().orEmpty()
+
+    /** SAF 文档读写（备份导出/导入）： URI 权限由系统回调自动授予，无需持久化。 */
+    private fun writeText(uri: Uri, text: String) {
+        appContext.contentResolver.openOutputStream(uri, "wt")?.use { stream ->
+            stream.write(text.toByteArray(Charsets.UTF_8))
+        } ?: throw IllegalStateException("无法写入 $uri")
+    }
+
+    private fun readText(uri: Uri): String =
+        appContext.contentResolver.openInputStream(uri)?.use {
+            String(it.readBytes(), Charsets.UTF_8)
+        } ?: throw IllegalStateException("无法读取 $uri")
 }
 
 /** 界面唯一状态源。 */
@@ -321,7 +555,33 @@ data class UiState(
     val dialog: DialogSpec = DialogSpec.None,
     /** ROM 真实曲线载入完成后自增，驱动预览重绘（旧 `NativeVolumeCurve.load()` 回调）。 */
     val curveRevision: Int = 0,
+    /** 当前全屏子页（日志 / 调试信息 / 许可 / 设备信息）；主页与设置/关于页由 pager 页位决定。 */
+    val route: AppRoute = AppRoute.NONE,
+    /** 界面语言（与 [SettingsStore] 同步；与 Activity 已生效值不同时界面重建）。 */
+    val language: AppLanguage = AppLanguage.SYSTEM,
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    /** 设置页当前标签（通用 / 备份与恢复 / 故障排除）。 */
+    val settingsTab: Int = 0,
+    /** 模块日志正文；null 表示尚未读取。 */
+    val logs: String? = null,
+    val logLoading: Boolean = false,
+    /** 调试信息快照；null 表示尚未收集。 */
+    val debug: DebugSnapshot? = null,
+    val debugLoading: Boolean = false,
 )
+
+/**
+ * 主页三页（主页 → 设置 → 关于）之外的全屏子页。
+ *
+ * 子页顶栏统一提供返回，因此只记录「当前在哪一页」，不做路由栈。
+ */
+enum class AppRoute {
+    NONE,
+    LOGS,
+    DEBUG,
+    LICENSES,
+    DEVICE,
+}
 
 /** 当前应显示的弹框（内容由界面按类型渲染，动作回调统一走 ViewModel）。 */
 sealed interface DialogSpec {
@@ -344,9 +604,6 @@ sealed interface DialogSpec {
     /** 手动重启系统框架的确认框。 */
     data object RestartSystemConfirm : DialogSpec
 
-    /** 纯提示框（无改动可保存等）。 */
+    /** 纯提示框（无改动可保存、检查更新结果等）。 */
     data class Notice(val title: String, val text: String) : DialogSpec
-
-    /** 模块日志框。 */
-    data class Logs(val text: String) : DialogSpec
 }

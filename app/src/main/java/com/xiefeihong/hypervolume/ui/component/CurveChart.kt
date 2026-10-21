@@ -27,7 +27,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.xiefeihong.hypervolume.R
 import com.xiefeihong.hypervolume.app.ChartSpec
+import com.xiefeihong.hypervolume.core.AppText
 import com.xiefeihong.hypervolume.core.Avrcp
 import com.xiefeihong.hypervolume.core.Prefs
 import java.util.Locale
@@ -253,9 +255,13 @@ private fun toPlotModel(spec: ChartSpec.Mapped): PlotModel {
         xMin = 0, xMax = steps, xIsPercent = false, samples = samples, yMax = yMax.toFloat(),
         yLabelBottom = null, yLabelMid = (yMax / 2).toString(), yLabelTop = yMax.toString(),
         dots = dots, dotsDriveGrid = true,
-        caption = Avrcp.curveLabel(spec.curveType) + "曲线 · " +
-            (if (spec.useSystemIndex) "系统档位" else "AVRCP") +
-            " " + spec.minAbs + "~" + spec.maxAbs + " · ○=每次按键落点",
+        caption = AppText.str(
+            R.string.chart_mapped_caption,
+            Avrcp.curveLabel(spec.curveType),
+            AppText.str(if (spec.useSystemIndex) R.string.chart_axis_sys else R.string.chart_axis_avrcp),
+            spec.minAbs,
+            spec.maxAbs,
+        ),
     )
 }
 
@@ -273,7 +279,7 @@ private fun toPlotModel(spec: ChartSpec.Native): PlotModel {
         dots = dots,
         // 档位模式：纵向网格按按键落点；百分比模式：无落点语义，三等分
         dotsDriveGrid = !spec.percentAxis && dots.isNotEmpty(),
-        caption = "系统原生 · " + spec.caption,
+        caption = AppText.str(R.string.chart_native_caption, spec.caption),
     )
 }
 
