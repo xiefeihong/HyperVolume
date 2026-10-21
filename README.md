@@ -22,7 +22,8 @@
 
 | 项目 | 要求 |
 |---|---|
-| 系统 | Android 10（API 29）及以上，实测基准 Xiaomi Redmi 12 5G / HyperOS 2（Android 15） |
+| 系统 | Android 10（API 29）及以上（`minSdk 29`） |
+| 目标机型 | 主要面向小米 **HyperOS / MIUI**（档位属性 `ro.config.media_vol_steps` 的读取方式取自 HyperCeiler）；旧版 volume_control 实测基准为 Redmi 12 5G（`23077RABDC`）/ HyperOS 2（Android 15） |
 | 必备 | 已 Root（授予 su）+ 已安装并启用 LSPosed |
 | Xposed 框架 | libxposed API **102**（`minApiVersion` / `targetApiVersion` 均为 102） |
 | 模块作用域 | `android` / `system` / `com.android.bluetooth`，`staticScope=true`（无需手动勾选目标） |
