@@ -4,7 +4,7 @@
 
 需要 **Root + LSPosed** 的 Android 系统增强模块（含配套设置 App）。它在系统底层重新划分"音量刻度"：音量条更细、按键落点更稳、低音量区间距更大，并可按 **蓝牙 / 有线耳机 / 外放** 分别配置生效模式与音量范围。
 
-本项目是 [volume_control](../volume_control)（Java + View + 手写 libxposed 入口）的 **Kotlin 重写版**：界面换用小米澎湃 OS 设计语言的 [Miuix](https://github.com/Miuix-UI/Miuix)（排版风格参考 [HyperCeiler](https://github.com/ReChronoRain/HyperCeiler)），Hook 层改用 [YukiHookAPI](https://github.com/HighCapable/YukiHookAPI) + [KavaRef](https://github.com/HighCapable/KavaRef)，功能与算法与旧版逐字对齐。
+本项目是 [volume_control](https://github.com/xiefeihong/volume_control)（Java + View + 手写 libxposed 入口）的 **Kotlin 重写版**：界面换用小米澎湃 OS 设计语言的 [Miuix](https://github.com/compose-miuix-ui/miuix)（排版风格参考 [HyperCeiler](https://github.com/ReChronoRain/HyperCeiler)），Hook 层改用 [YukiHookAPI](https://github.com/HighCapable/YukiHookAPI) + [KavaRef](https://github.com/HighCapable/KavaRef)，功能与算法与旧版逐字对齐。
 
 ## 能帮你解决什么
 
@@ -225,4 +225,6 @@ JVM 单元测试覆盖与界面无关的核心算法，共 **7 个测试类 / 57
 
 ## 许可
 
-本项目以 **GNU GPLv3** 发布（见 [LICENSE](LICENSE)），主要基于同样以 GPLv3 发布的 [Miuix](https://github.com/Miuix-UI/Miuix)、[YukiHookAPI](https://github.com/HighCapable/YukiHookAPI)、[KavaRef](https://github.com/HighCapable/KavaRef) 与 [HyperCeiler](https://github.com/ReChronoRain/HyperCeiler) 的设计与实现。仅供学习与个人使用。
+本项目以 **GNU GPLv3** 发布（完整条款见 [LICENSE](LICENSE)），与旧版 volume_control 保持一致。
+
+实现过程中参考了 [Miuix](https://github.com/compose-miuix-ui/miuix)、[YukiHookAPI](https://github.com/HighCapable/YukiHookAPI)、[KavaRef](https://github.com/HighCapable/KavaRef) 与 [HyperCeiler](https://github.com/ReChronoRain/HyperCeiler) 的设计与接口用法，在此致谢；使用本项目时请同时遵守上述上游项目各自的许可证。仅供学习与个人使用。
