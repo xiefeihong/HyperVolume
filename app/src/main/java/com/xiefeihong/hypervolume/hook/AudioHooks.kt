@@ -1,0 +1,1046 @@
+package com.xiefeihong.hypervolume.hook
+
+import android.content.Context
+import android.media.AudioManager
+import android.os.Handler
+import android.os.Looper
+import com.highcapable.yukihookapi.hook.param.HookChain
+import com.highcapable.yukihookapi.hook.param.PackageParam
+import com.xiefeihong.hypervolume.core.Avrcp
+import com.xiefeihong.hypervolume.core.OutputDevice
+import com.xiefeihong.hypervolume.core.Prefs
+import com.xiefeihong.hypervolume.core.VolumeConfig
+import java.lang.reflect.Field
+import java.lang.reflect.Method
+import java.lang.reflect.Modifier
+import java.util.Optional
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * 系统框架（system_server）侧的全部 Hook 与档位保险。
+ *
+ *
+ * **档位数（五重保险，重启手机立即生效）：**
+ *  1. 拦截 `SystemProperties.getInt("ro.config.media_vol_steps")` —— HyperOS 的
+ *     AudioService 初始化读取该属性决定媒体档位数（参考 HyperCeiler）。缓存未就绪时
+ *     在回调内现场刷新（v1.8 的缺陷：加载时读不到配置就永不拦截）；
+ *  2. AudioService 构造器开始前改写静态档位数组 MAX_STREAM_VOLUME；
+ *  3. createStreamStates 前再改写一次（ROM 可能在构造器中途按属性重新赋值数组）；
+ *  4. 构造完成后（constructor）、开机延迟校正（boot correction）、界面读取
+ *     （getStreamMaxVolume 自愈）三处校验实例 mIndexMax，不一致立即校正；
+ *  5. App 保存配置时以 root 写入 post-fs-data 开机脚本，system_server 启动前直接
+ *     setprop 真实属性（最强保障，不依赖任何 Hook）。
+ *
+ *
+ * 对 AudioService 构造器与 createStreamStates 执行 `deoptimize`，防止调用点
+ * 被内联后绕过对 SystemProperties.getInt 的拦截。
+ *
+ *
+ * **模式B 软件衰减（VolumeStreamState.setStreamVolumeIndex 内计算）：**
+ * Hook `VolumeStreamState#setStreamVolumeIndex` 把系统音量档位
+ * 按 minAbs~maxAbs 曲线映射降低（低音量增强曲线）；并通过反射恢复
+ * mIndexMap 原始档位，避免 getStreamVolume 读回 remapped 二次映射导致音量卡死。
+ *
+ *
+ * **模式B 保险：** `avrcpSupportsAbsoluteVolume` 强制上报"不支持"，
+ * `postSetAvrcpAbsoluteVolumeIndex` 拦截发往蓝牙栈的音量值。
+ * 切换模式后需重启蓝牙使 `deviceConnected` 重新触发。
+ */
+object AudioHooks {
+
+    private const val METHOD_CREATE_STREAM_STATES = "createStreamStates"
+    private const val METHOD_GET_STREAM_MAX_VOLUME = "getStreamMaxVolume"
+    private const val METHOD_SET_STREAM_VOLUME_INDEX = "setStreamVolumeIndex"
+    private const val METHOD_AVRCP_SUPPORTS_ABS_VOLUME = "avrcpSupportsAbsoluteVolume"
+    private const val METHOD_POST_AVRCP_VOLUME = "postSetAvrcpAbsoluteVolumeIndex"
+
+    /** 音量键步进：接管 adjustStreamVolume，按用户设定的 delta 重算目标级（仅媒体、仅按键）。 */
+    private const val METHOD_ADJUST_STREAM_VOLUME = "adjustStreamVolume"
+    private const val METHOD_GET_STREAM_VOLUME = "getStreamVolume"
+    private const val METHOD_SET_STREAM_VOLUME = "setStreamVolume"
+
+    /** 拖后按键绕过 adjustStreamVolume、经 Binder 下发的服务端同步入口（优先挂此名）。 */
+    private const val METHOD_SET_STREAM_VOLUME_WITH_ATTRIBUTION = "setStreamVolumeWithAttribution"
+
+    /** setStreamVolume 若仅有带 callingPackage 的重载时补传的调用方包名（system_server 内调用可过权限）。 */
+    private const val SET_VOLUME_CALLING_PACKAGE = "com.android.systemui"
+    private const val PROP_MEDIA_VOL_STEPS = "ro.config.media_vol_steps"
+    private const val FIELD_MAX_STREAM_VOLUME = "MAX_STREAM_VOLUME"
+    private const val FIELD_STREAM_STATES = "mStreamStates"
+    private const val FIELD_STREAM_TYPE = "mStreamType"
+    private const val FIELD_INDEX_MAX = "mIndexMax"
+    private const val FIELD_AUDIO_SERVICE = "this\$0"
+
+    /** getStreamMaxVolume 自愈：慢路径校验节流间隔（毫秒）。 */
+    private const val SELF_HEAL_THROTTLE_MS = 5000L
+
+    /** 属性回调内现场刷新的节流间隔（毫秒）：开机早期属性读取高频。 */
+    private const val OVERRIDE_REFRESH_THROTTLE_MS = 1000L
+
+    /** 按键 adjust 最小有效增量占档位数的比例：|delta| 小于 max(2, levels*此比例) 视为噪声交回系统。 */
+    private const val KEY_DELTA_MIN_RATIO = 0.03f
+
+    /** 判定「拖动 vs 按键」的相邻媒体变更最小间隔：小于此值视为拖动密集连发，放行不动。 */
+    private const val KEY_SNAP_GAP_NS = 450_000_000L
+
+    /** 开机校正时间点（毫秒）：覆盖系统服务逐步就绪的过程。 */
+    private val BOOT_CORRECTION_DELAYS_MS = longArrayOf(2_000L, 5_000L, 15_000L, 30_000L, 60_000L)
+
+    /** AudioService 类（install 时解析，供各 Hooker 使用）。 */
+    @Volatile
+    private var sAudioServiceClass: Class<*>? = null
+
+    /** system_server 最近一次见到的 AudioService 实例。 */
+    @Volatile
+    private var sAudioService: Any? = null
+
+    /**
+     * 属性拦截缓存：ro.config.media_vol_steps 的返回值（10~100）；-1 表示
+     * 未就绪或模块停用（不拦截）。由配置读取路径与属性回调现场刷新。
+     */
+    @Volatile
+    private var sMediaStepsOverride = -1
+
+    /** getStreamMaxVolume 自愈：已验证一致的档位数（快路径）。 */
+    @Volatile
+    private var sVerifiedMaxSteps = 0
+
+    /** getStreamMaxVolume 自愈：上次慢路径校验时间（毫秒）。 */
+    @Volatile
+    private var sLastSelfHealCheck = 0L
+
+    /** 属性回调内现场刷新的上次时间（毫秒）。 */
+    @Volatile
+    private var sLastOverrideRefresh = 0L
+
+    /** 日志节流：避免音量拖动时高频刷屏。 */
+    private var sLastBlockedIndex = -1
+
+    private var sPropHitLogged = false
+
+    /** ROM 原始档位数组：只在首次调用时备份。 */
+    private var sOriginalMaxStreamVolumes: IntArray? = null
+
+    /** 「拖后按键」网格吸附：system_server 最近一次媒体档位 set 的时间戳（纳秒）。 */
+    @Volatile
+    private var sLastSetNanos = 0L
+
+    /** 「拖后按键」网格吸附：上次已记录的吸附落点，用于吸附日志去重。 */
+    private var sLastSnapLogged = -1
+
+    /** 音量键步进：首次命中日志标记。 */
+    private var sAdjustFiredLogged = false
+
+    private var sAdjustEntryLogged = false
+
+    /**
+     * 方法解析缓存：[findIntMethod] 与 [resolveSetStreamVolumeMethod] 此前每次调用都
+     * 沿类层次 `getDeclaredMethod`/`getDeclaredMethods` 遍历。key 含类名与方法签名，
+     * 含未命中的 `Optional.empty()` 负缓存。热路径（音量键 adjust/读写当前与最大档位）受益。
+     */
+    private val sMethodCache = ConcurrentHashMap<String, Optional<Method>>()
+
+    // ==================== 安装 ====================
+
+    /** 在 system_server 启动关键服务前安装全部系统框架侧 Hook。 */
+    fun install(param: PackageParam) {
+        try {
+            XposedKit.init(true)
+            val classLoader = param.hostClassLoader
+                ?: throw IllegalStateException("system_server class loader unavailable")
+            val audioService = classLoader.loadClass(XposedKit.AUDIO_SERVICE_CLASS)
+            sAudioServiceClass = audioService
+
+            // 第一重保险（重启手机立即生效的关键）：拦截 ro.config.media_vol_steps
+            hookMediaStepsProperty(param, classLoader)
+
+            val ctors = param.hookAllConstructors(audioService) { chain -> audioServiceCtor(chain) }
+            XposedKit.log("${audioService.name} constructors hooked: $ctors")
+
+            // 第三重保险：createStreamStates 前再改写一次数组
+            val states = param.hookAllNamed(audioService, METHOD_CREATE_STREAM_STATES) { chain ->
+                createStreamStates(chain)
+            }
+            XposedKit.log("${audioService.name}#$METHOD_CREATE_STREAM_STATES hooked: $states")
+
+            // 自愈兜底：界面/系统每次读取媒体档位上限时校验，发现未生效立即校正
+            val selfHeal = param.hookAllNamed(audioService, METHOD_GET_STREAM_MAX_VOLUME) { chain ->
+                streamMaxSelfHeal(chain)
+            }
+            XposedKit.log("${audioService.name}#$METHOD_GET_STREAM_MAX_VOLUME hooked: $selfHeal")
+
+            hookSoftwareVolumeCurve(param, classLoader)
+            hookAbsoluteVolumeSuppression(param, classLoader)
+            hookVolumeKeyStep(param)
+            // 「拖后按键」网格吸附（保守重启）：拖动后 HyperOS 将对话框置「直接落值」态，音量键
+            // 改走 setStreamVolumeWithAttribution 绕开 adjust 接管，落点变成 ROM 默认~7%。本 Hook 仅对
+            // 【孤立且 Δ 够大（真实按键一整步）】的媒体写入吸附到相邻网格档；密集（拖动）与 Δ 过小
+            // （SystemUI 同步/取整回写）一律原样放行，避免之前的 32%↔36% 自激振荡。详见 mediaVolumeGridSnap。
+            hookMediaVolumeGridSnap(param)
+
+            // 防内联：构造器与 createStreamStates 若被 AOT 内联，其中的
+            // SystemProperties.getInt 调用会绕过 Hook 拦截；强制解释执行。
+            val deoptimized =
+                param.deoptimizeCtorsAndMethods(audioService, METHOD_CREATE_STREAM_STATES)
+            XposedKit.log("deoptimized members: $deoptimized")
+
+            // 立即读取配置填充属性拦截缓存（此时 SettingsProvider 未就绪，
+            // 镜像文件通道可读）；失败由属性回调与开机校正重试。
+            val steps = refreshMediaStepsOverride()
+            XposedKit.log(
+                "media steps override: " + if (steps < 0) "not ready, will retry on demand" else steps.toString(),
+            )
+
+            scheduleBootCorrection()
+            // 诊断：安装完成后立即读取并记录当前配置
+            val diagConfig = XposedKit.readConfig(XposedKit.systemServerContext(null))
+            XposedKit.log("system_server hooks installed, config=$diagConfig")
+        } catch (t: Throwable) {
+            XposedKit.logError("hook system server failed: $t")
+        }
+    }
+
+    // ==================== 第一重保险：属性拦截 ====================
+
+    /**
+     * 拦截 `SystemProperties.getInt("ro.config.media_vol_steps", ...)`：
+     * 命中该属性时返回缓存的用户档位数。HyperOS 的 AudioService 初始化通过该
+     * 属性读取媒体档位数（默认 20），拦截后 ROM 自身流程即使用正确档位。
+     *
+     *
+     * 关键修复（相对 v1.8）：缓存未就绪（-1）时在回调内**现场刷新**——
+     * AudioService 构造读取属性的那一刻才是真正需要配置值的时刻，届时
+     * SettingsProvider / 镜像文件往往已可读；v1.8 仅在模块加载时读一次，
+     * 冷启动早期读不到就永远错过。刷新带 1 秒节流，就绪后回调只剩
+     * volatile 读 + 字符串比较，开销可忽略。
+     */
+    private fun hookMediaStepsProperty(param: PackageParam, classLoader: ClassLoader) {
+        val systemProperties = classLoader.loadClass("android.os.SystemProperties")
+        val hooked = param.hookAllNamed(systemProperties, "getInt") { chain -> propGetInt(chain) }
+        XposedKit.log("SystemProperties#getInt hooked: $hooked (target: $PROP_MEDIA_VOL_STEPS)")
+    }
+
+    /** 属性拦截回调：命中 ro.config.media_vol_steps 时返回用户档位数。 */
+    private fun propGetInt(chain: HookChain): Any? {
+        XposedKit.logOnce("hook-prop-getint", "HOOK fired: SystemProperties#getInt")
+        try {
+            val key = chain.arg(0)
+            if (key is String && PROP_MEDIA_VOL_STEPS == key) {
+                var override = sMediaStepsOverride
+                if (override < Prefs.MEDIA_STEPS_MIN) {
+                    override = refreshMediaStepsOverrideThrottled()
+                }
+                if (override >= Prefs.MEDIA_STEPS_MIN) {
+                    if (!sPropHitLogged) {
+                        sPropHitLogged = true
+                        XposedKit.log("property hit: $PROP_MEDIA_VOL_STEPS -> $override")
+                    }
+                    return override
+                }
+            }
+        } catch (t: Throwable) {
+            XposedKit.logError("property intercept failed: $t")
+        }
+        return chain.proceed()
+    }
+
+    /** 读取配置并刷新属性拦截缓存（未就绪 / 停用置 -1，不拦截）；返回缓存的档位数。 */
+    private fun refreshMediaStepsOverride(): Int {
+        val config = XposedKit.readConfig(XposedKit.systemServerContext(null))
+        val steps = if (config != null && config.remapActive) config.mediaSteps else -1
+        sMediaStepsOverride = steps
+        return steps
+    }
+
+    /** 属性回调内的节流刷新：开机早期配置可能短暂不可读，这里按秒级重试。 */
+    private fun refreshMediaStepsOverrideThrottled(): Int {
+        val now = System.currentTimeMillis()
+        if (now - sLastOverrideRefresh < OVERRIDE_REFRESH_THROTTLE_MS) {
+            return sMediaStepsOverride
+        }
+        sLastOverrideRefresh = now
+        return refreshMediaStepsOverride()
+    }
+
+    // ==================== 构造器 / createStreamStates：静态数组改写 ====================
+
+    /** AudioService 构造器：开始前缓存 Context 并改写静态档位数组；完成后校验实例档位。 */
+    private fun audioServiceCtor(chain: HookChain): Any? {
+        XposedKit.logOnce("hook-ctor", "HOOK fired: AudioService.<init>")
+        try {
+            val args = chain.args
+            if (args.isNotEmpty() && args[0] is Context) {
+                XposedKit.cacheSystemContext(args[0] as Context)
+            }
+            applyMediaSteps()
+            chain.proceed()
+            val instance = chain.instance
+            sAudioService = instance
+            syncMediaStreamMax(instance, "constructor")
+        } catch (t: Throwable) {
+            XposedKit.logError("constructor: sync media steps failed: $t")
+        }
+        return null
+    }
+
+    /** createStreamStates：流状态创建前再改写一次数组（ROM 可能中途按属性重赋值）。 */
+    private fun createStreamStates(chain: HookChain): Any? {
+        XposedKit.logOnce("hook-createstream", "HOOK fired: createStreamStates")
+        try {
+            applyMediaSteps()
+        } catch (t: Throwable) {
+            XposedKit.logError("$METHOD_CREATE_STREAM_STATES: apply media steps failed: $t")
+        }
+        return chain.proceed()
+    }
+
+    /** 把媒体流档位上限改为用户设置值（10~100，其余流不动；原地修改兼容 final 字段）。 */
+    private fun applyMediaSteps() {
+        val audioServiceClass = sAudioServiceClass ?: return
+        val config = XposedKit.readConfig(XposedKit.systemServerContext(null))
+        if (config == null) {
+            XposedKit.log("no config found, keep system defaults")
+            return
+        }
+        if (!config.remapActive) {
+            sMediaStepsOverride = -1
+            XposedKit.log("disabled, keep system defaults")
+            return
+        }
+        val maxStreamVolumes = XposedKit.getStaticIntArrayField(
+            audioServiceClass,
+            FIELD_MAX_STREAM_VOLUME,
+        )
+        if (maxStreamVolumes == null) {
+            XposedKit.logError("unexpected MAX_STREAM_VOLUME type, abort")
+            return
+        }
+        val original = sOriginalMaxStreamVolumes
+        if (original == null || original.size != maxStreamVolumes.size) {
+            sOriginalMaxStreamVolumes = maxStreamVolumes.clone()
+        }
+        val mediaSteps = config.mediaSteps
+        maxStreamVolumes[Prefs.STREAM_MUSIC_INDEX] = mediaSteps
+        // 属性拦截缓存同步（幂等）
+        sMediaStepsOverride = mediaSteps
+        XposedKit.log(
+            "media steps: ${sOriginalMaxStreamVolumes!![Prefs.STREAM_MUSIC_INDEX]}" +
+                " -> $mediaSteps (others untouched)",
+        )
+    }
+
+    // ==================== 实例档位校验 / 校正 / 自愈 ====================
+
+    /**
+     * 校验并校正媒体流实例档位（`mIndexMax` = 档位数×10），返回目标档位数。
+     * 调用方：构造完成、开机延迟校正、界面读取自愈。
+     *
+     * @return 目标档位数；无配置 / 已停用时返回 -1；实例字段读写失败抛出，由调用方 Hooker 统一捕获
+     */
+    @Throws(Exception::class)
+    private fun syncMediaStreamMax(audioService: Any, tag: String): Int {
+        val config = XposedKit.readConfig(XposedKit.systemServerContext(audioService))
+        if (config == null) {
+            XposedKit.log("$tag: no config, keep system defaults")
+            return -1
+        }
+        if (!config.remapActive) {
+            sMediaStepsOverride = -1
+            XposedKit.log("$tag: disabled, keep system defaults")
+            return -1
+        }
+        val target = config.mediaSteps
+        sMediaStepsOverride = target
+        val current = readMediaStreamMaxSteps(audioService)
+        if (current < 0) {
+            XposedKit.logError("$tag: mStreamStates unavailable (obj=" + audioService.javaClass.name + ")")
+            return -1
+        }
+        if (current == target) {
+            sVerifiedMaxSteps = target
+            XposedKit.log("$tag: media max verified $target")
+            return target
+        }
+        if (correctMediaStreamMax(audioService, target)) {
+            sVerifiedMaxSteps = target
+            XposedKit.log("$tag: media max corrected $current -> $target")
+            return target
+        }
+        XposedKit.logError("$tag: media max correct failed")
+        return -1
+    }
+
+    /** 读取媒体流实例当前档位上限（档位数）；mStreamStates 缺失返回 -1，字段读写失败抛出。 */
+    private fun readMediaStreamMaxSteps(audioService: Any): Int = try {
+        val mediaState = mediaStreamState(audioService) ?: return -1
+        XposedKit.getIntField(mediaState, FIELD_INDEX_MAX) / 10
+    } catch (t: Throwable) {
+        XposedKit.logErrorOnce("read-media-max", "read media mIndexMax failed: $t")
+        -1
+    }
+
+    /** 直接把媒体流实例的 mIndexMax 设为档位数×10；mStreamStates 缺失返回 false，字段写失败抛出。 */
+    private fun correctMediaStreamMax(audioService: Any, steps: Int): Boolean = try {
+        val mediaState = mediaStreamState(audioService) ?: return false
+        XposedKit.setIntField(mediaState, FIELD_INDEX_MAX, steps * 10)
+        true
+    } catch (t: Throwable) {
+        XposedKit.logErrorOnce("correct-media-max", "correct media mIndexMax failed: $t")
+        false
+    }
+
+    /** 取 mStreamStates 中的媒体流状态对象；数组缺失/越界/元素为空返回 null，字段读失败抛出。 */
+    private fun mediaStreamState(audioService: Any): Any? {
+        val fieldValue = XposedKit.getField(audioService, FIELD_STREAM_STATES)
+        val states = fieldValue as? Array<*> ?: return null
+        if (states.size <= Prefs.STREAM_MUSIC_INDEX) {
+            return null
+        }
+        return states[Prefs.STREAM_MUSIC_INDEX]
+    }
+
+    /** getStreamMaxVolume 自愈兜底（读取必经点）：不一致立即校正并修正本次返回值。 */
+    private fun streamMaxSelfHeal(chain: HookChain): Any? {
+        XposedKit.logOnce("hook-selfheal", "HOOK fired: getStreamMaxVolume (self-heal)")
+        val result = chain.proceed()
+        try {
+            if (chain.arg(0) != Prefs.STREAM_MUSIC_INDEX) {
+                return result
+            }
+            val current = result as? Int ?: return result
+            val thisObject = chain.instance
+            sAudioService = thisObject
+            if (current <= 0 || current == sVerifiedMaxSteps) {
+                return result
+            }
+            val now = System.currentTimeMillis()
+            if (now - sLastSelfHealCheck < SELF_HEAL_THROTTLE_MS) {
+                return result
+            }
+            sLastSelfHealCheck = now
+            val target = syncMediaStreamMax(thisObject, "self-heal")
+            if (target >= 1 && target != current) {
+                return target
+            }
+        } catch (t: Throwable) {
+            XposedKit.logError("self-heal check failed: $t")
+        }
+        return result
+    }
+
+    // ==================== 开机主动校正 ====================
+
+    /** 模块加载后延迟主动校正档位（开机兜底，主线程执行避免并发改实例字段）。 */
+    private fun scheduleBootCorrection() {
+        val handler = Handler(Looper.getMainLooper())
+        for (delay in BOOT_CORRECTION_DELAYS_MS) {
+            handler.postDelayed(RUN_BOOT_CORRECTION, delay)
+        }
+    }
+
+    private val RUN_BOOT_CORRECTION = Runnable {
+        try {
+            refreshMediaStepsOverride()
+            var audioService = sAudioService
+            if (audioService == null) {
+                audioService = systemAudioService()
+            }
+            if (audioService == null) {
+                XposedKit.logError("boot correction: audio service unavailable")
+            } else {
+                XposedKit.log("boot correction: service=" + audioService.javaClass.name)
+                syncMediaStreamMax(audioService, "boot correction")
+            }
+        } catch (t: Throwable) {
+            XposedKit.logError("boot correction failed: $t")
+        }
+    }
+
+    /**
+     * 反射获取 system_server 内的 AudioService 实例。
+     *
+     *
+     * `ServiceManager.getService("audio")` 在 system_server 进程内返回的
+     * 是本地 Binder Stub（IAudioService.Stub 子类），它通过 `this$0` 等
+     * 实例字段持有外部 AudioService——必须解引用拿到真正的 AudioService，
+     * 直接把 Stub 当 AudioService 用会导致读 mStreamStates 失败（v1.8 缺陷）。
+     */
+    private fun systemAudioService(): Any? = try {
+        val serviceManager = Class.forName("android.os.ServiceManager")
+        val binder = serviceManager.getMethod("getService", String::class.java)
+            .invoke(null, Context.AUDIO_SERVICE)
+        if (binder == null) {
+            null
+        } else {
+            audioServiceFromBinder(binder) ?: run {
+                XposedKit.logErrorOnce(
+                    "audio-service",
+                    "audio binder has no AudioService field: " + binder.javaClass.name,
+                )
+                null
+            }
+        }
+    } catch (t: Throwable) {
+        XposedKit.logErrorOnce("audio-service", "get audio service failed: $t")
+        null
+    }
+
+    /** 从 Binder Stub 中找出 AudioService 类型的实例字段（含 this$0 外部类引用）；读失败抛出。 */
+    @Throws(Throwable::class)
+    private fun audioServiceFromBinder(binder: Any): Any? {
+        var c: Class<*>? = binder.javaClass
+        while (c != null && c != Any::class.java) {
+            for (field in c.declaredFields) {
+                if (Modifier.isStatic(field.modifiers)) {
+                    continue
+                }
+                if (XposedKit.AUDIO_SERVICE_CLASS == field.type.name) {
+                    field.isAccessible = true
+                    val value = field.get(binder)
+                    if (value != null) {
+                        return value
+                    }
+                }
+            }
+            c = c.superclass
+        }
+        return null
+    }
+
+    // ==================== 模式B：软件衰减范围 + 绝对音量压制 ====================
+
+    /**
+     * 模式B 的系统框架侧保险（双通道拦截）：
+     * 1. `avrcpSupportsAbsoluteVolume`：强制上报"不支持绝对音量"，使 AudioService
+     *    对 A2DP 设备走软件衰减路径（否则音量仅通过 AVRCP 发送，被 sendVolumeChanged 阻断）；
+     * 2. `postSetAvrcpAbsoluteVolumeIndex`：拦截音量转发。
+     */
+    private fun hookAbsoluteVolumeSuppression(param: PackageParam, classLoader: ClassLoader) {
+        val audioService = classLoader.loadClass(XposedKit.AUDIO_SERVICE_CLASS)
+        val hooked1 = param.hookAllNamed(audioService, METHOD_AVRCP_SUPPORTS_ABS_VOLUME) { chain ->
+            avrcpSupports(chain)
+        }
+        XposedKit.log("${audioService.name}#$METHOD_AVRCP_SUPPORTS_ABS_VOLUME hooked: $hooked1")
+        val deviceBroker = classLoader.loadClass(XposedKit.AUDIO_DEVICE_BROKER_CLASS)
+        val hooked2 = param.hookAllNamed(deviceBroker, METHOD_POST_AVRCP_VOLUME) { chain ->
+            postAvrcpVolume(chain)
+        }
+        XposedKit.log("${deviceBroker.name}#$METHOD_POST_AVRCP_VOLUME hooked: $hooked2")
+    }
+
+    /** 上报入口：模式B 下强制"不支持绝对音量"（使 AudioService 走软件衰减路径）。 */
+    private fun avrcpSupports(chain: HookChain): Any? {
+        XposedKit.logOnce("hook-avrcp-support", "HOOK fired: avrcpSupportsAbsoluteVolume")
+        return try {
+            val args = chain.args
+            if (args.size < 2 || args[1] != java.lang.Boolean.TRUE) {
+                return chain.proceed()
+            }
+            val config = XposedKit.readConfig(XposedKit.systemServerContext(chain.instance))
+            if (config == null || !config.suppressBtAbsoluteVolume()) {
+                return chain.proceed()
+            }
+            XposedKit.logOnce("modeb-support", "modeB: force avrcp support=false")
+            chain.proceedWithReplaced(1, java.lang.Boolean.FALSE)
+        } catch (t: Throwable) {
+            XposedKit.logError("avrcpSupports hook failed: $t")
+            chain.proceed()
+        }
+    }
+
+    /** 发送入口：模式B 下拦截音量转发（耳机端固定）。 */
+    private fun postAvrcpVolume(chain: HookChain): Any? {
+        XposedKit.logOnce("hook-post-avrcp", "HOOK fired: postSetAvrcpAbsoluteVolumeIndex")
+        return try {
+            val index = chain.arg(0) as? Int ?: return chain.proceed()
+            val config = XposedKit.readConfig(XposedKit.systemServerContext(chain.instance))
+            if (config == null || !config.suppressBtAbsoluteVolume()) {
+                return chain.proceed()
+            }
+            if (index != sLastBlockedIndex) {
+                sLastBlockedIndex = index
+                XposedKit.log("modeB: block avrcp volume forward (index=$index)")
+            }
+            null
+        } catch (t: Throwable) {
+            XposedKit.logError("postAvrcpVolume hook failed: $t")
+            chain.proceed()
+        }
+    }
+
+    /**
+     * 模式B：音量范围对手机端软件衰减生效。
+     * `VolumeStreamState#setStreamVolumeIndex(index, device)` 是档位应用必经点，
+     * 蓝牙 A2DP 设备上的衰减档位按「最小~最大」范围重映射（低音量增强曲线）。
+     */
+    private fun hookSoftwareVolumeCurve(param: PackageParam, classLoader: ClassLoader) {
+        val streamState = classLoader.loadClass(XposedKit.VOLUME_STREAM_STATE_CLASS)
+        val hooked = param.hookAllNamed(streamState, METHOD_SET_STREAM_VOLUME_INDEX) { chain ->
+            setStreamVolumeIndex(chain)
+        }
+        XposedKit.log("${streamState.name}#$METHOD_SET_STREAM_VOLUME_INDEX hooked: $hooked")
+        if (hooked == 0) {
+            XposedKit.logError("setStreamVolumeIndex NOT FOUND on VolumeStreamState!")
+        }
+    }
+
+    /**
+     * 音量键步进：接管 `AudioService#adjustStreamVolume`，对媒体流的
+     * ADJUST_RAISE/LOWER 按当前位置吸附到 `keySteps` 网格（目标 =
+     * `Prefs.nextKeyStepUp/Down`，即严格大于/小于当前的 `round(i*maxSteps/keySteps)`），
+     * 再直接 `setStreamVolume`，完全覆盖 ROM 默认的「按 maxIndex/15 分段」步进，
+     * 并使滑块百分比落在 100/keySteps 的整数倍。屏幕滑条拖动走 setStreamVolume 不经此路径，
+     * 保留全部级数精度。
+     *
+     *
+     * 若 `hooked:0`（ROM 音量键不走此方法），则保持系统默认步进并如实记录。
+     */
+    private fun hookVolumeKeyStep(param: PackageParam) {
+        val audioService = sAudioServiceClass
+            ?: param.hostClassLoader!!.loadClass(XposedKit.AUDIO_SERVICE_CLASS)
+        val hooked = param.hookAllNamed(audioService, METHOD_ADJUST_STREAM_VOLUME) { chain ->
+            adjustStreamVolume(chain)
+        }
+        XposedKit.log(
+            "key step: ${audioService.name}#$METHOD_ADJUST_STREAM_VOLUME hooked: $hooked" +
+                if (hooked == 0) " (keys routed elsewhere; step stays default)" else "",
+        )
+    }
+
+    /**
+     * 「拖后按键」网格吸附：挂 `AudioService#setStreamVolumeWithAttribution`（拖后音量键
+     * 绕开 adjustStreamVolume、经 Binder 落到服务端的同步入口），按时间间隔区分拖动（密集放行、
+     * 保留全精度）与按键（孤立吸附到网格）。取不到该方法时回退挂 `setStreamVolume`。
+     *
+     *
+     * 详见 [mediaVolumeGridSnap]。与 [hookVolumeKeyStep] 互补：正常按键走
+     * adjustStreamVolume 已被接管吸附，本 Hook 专门兜住「拖动之后」改走 setStreamVolume 的按键。
+     */
+    private fun hookMediaVolumeGridSnap(param: PackageParam) {
+        val audioService = sAudioServiceClass
+            ?: param.hostClassLoader!!.loadClass(XposedKit.AUDIO_SERVICE_CLASS)
+        var method = METHOD_SET_STREAM_VOLUME_WITH_ATTRIBUTION
+        var hooked = param.hookAllNamed(audioService, method) { chain -> mediaVolumeGridSnap(chain) }
+        if (hooked == 0) {
+            method = METHOD_SET_STREAM_VOLUME
+            hooked = param.hookAllNamed(audioService, method) { chain -> mediaVolumeGridSnap(chain) }
+        }
+        XposedKit.log(
+            "grid snap: ${audioService.name}#$method hooked: $hooked" +
+                if (hooked == 0) " (no setStreamVolume entry; post-drag keys stay default)" else "",
+        )
+    }
+
+    /**
+     * 「拖后按键」网格吸附（宿主 [AudioHooks] 的实现细节，与其他 Hooker 一致保持私有函数）。
+     *
+     *
+     * **当前状态：保守重启（带防误伤门限）。** 早期版本曾因①刻度不同源（用 config.mediaSteps）
+     * 与②把 SystemUI 非按键同步写入也吸附，导致音量自激振荡（32%↔36% 循环）与反向掉档。现两者已修：
+     * levels 改用**实时物理上限** getStreamMaxVolume（与 [adjustStreamVolume] 同源）；并对
+     * **Δ 过小**（≈零/±1）的调用一律视为系统回写、原样放行，从根上消除误伤。
+     *
+     *
+     * 背景（adb 实测 + SystemUI 抓栈定位）：未拖动时音量键走
+     * `AudioService#adjustStreamVolume`，由 [adjustStreamVolume] 吸附到网格；
+     * 但一旦拖过一次滑条，HyperOS 会把音量对话框置为「直接落值」状态，随后的音量键改走
+     * `SystemUI → Binder → AudioService#setStreamVolumeWithAttribution(绝对档位)`，
+     * 绕开 `adjustStreamVolume` 接管，导致落点偏离网格（步长约 7~14%）。
+     *
+     *
+     * `setStreamVolumeWithAttribution` 是拖动与「拖后按键」在服务端唯一共同经过的**同步**
+     * 入口。二者的唯一区别是**时间形态**：拖动是密集连发（相邻两次 <~100ms），按键是孤立一次
+     * （与上一次间隔 >~450ms）；再叠加 Δ 门限区分真实按键与系统回写。本函数据此：
+     *  - 媒体档位变更且与上一次媒体变更间隔 < [KEY_SNAP_GAP_NS]（密集）→ 判为拖动，
+     *    直接放行，**保留拖动全精度**（不读配置，热路径仅整数比较）；
+     *  - 间隔足够大（孤立）且 Δ 够大（真实按键一整步）→ 相对当前档位吸附到**相邻的一个网格档**
+     *    （与 adjustStreamVolume 接管同用 `Prefs.nextKeyStepUp/Down`），每次恰好跳 1 段。
+     *
+     *
+     * 时间戳 [sLastSetNanos] 在每次媒体档位变更时刷新，使连续拖动期间判据稳定为「密集」。
+     */
+    private fun mediaVolumeGridSnap(chain: HookChain): Any? {
+        val args = chain.args
+        try {
+            // 目标方法签名：setStreamVolumeWithAttribution(int streamType, int index, int flags, ...)
+            if (args.size < 3 || args[0] !is Int || args[1] !is Int) {
+                return chain.proceed()
+            }
+            if (args[0] != Prefs.STREAM_MUSIC_INDEX) {
+                return chain.proceed()
+            }
+            val index = args[1] as Int
+            val now = System.nanoTime()
+            val prev = sLastSetNanos
+            sLastSetNanos = now // 每次媒体变更都刷新，使拖动期间判据稳定为「密集」
+            if (index <= 0) {
+                return chain.proceed()
+            }
+            // 热路径优先：密集连发（拖动）直接放行，连配置都不读，保留全精度。
+            if (now - prev < KEY_SNAP_GAP_NS) {
+                return chain.proceed()
+            }
+            // 孤立变更 → 读配置判断是否需要吸附到网格。
+            val config = XposedKit.readConfig(XposedKit.systemServerContext(chain.instance))
+            if (config == null || !config.remapActive) {
+                return chain.proceed()
+            }
+            // levels 必须取【实时物理上限】(getStreamMaxVolume)，与 adjustStreamVolume 同源；
+            // 绝不能用 config.mediaSteps（改档位数后未重启框架时物理上限仍为旧值，两者不一致会自激振荡）。
+            val levels = readMediaMaxIndex(chain.instance)
+            val segs = Prefs.clampKeySteps(config.keySteps)
+            if (levels <= 0 || segs >= levels) {
+                return chain.proceed() // 读不到上限或网格不稀疏，逐级即正确
+            }
+            // 读当前媒体档位（优先真实 AudioService 实例，回退 this）；读不到或无变化保守放行。
+            val current = readMediaVolumeIndex(chain.instance)
+            if (current < 0 || index == current) {
+                return chain.proceed()
+            }
+            // 【防误伤/防振荡】真实按键相对当前是一整步（~7%），而 SystemUI 对话框同步/取整写入
+            // 的 Δ 只有 0/±1。Δ 过小一律视为系统回写、原样放行——否则会把同步写入吸附
+            // 成反向掉档并与 SystemUI 相互回写振荡（实测按音量+反而 40→39 的根因）。
+            val delta = index - current
+            val minKeyDelta = maxOf(2, Math.round(levels * KEY_DELTA_MIN_RATIO))
+            if (Math.abs(delta) < minKeyDelta) {
+                return chain.proceed()
+            }
+            // 相对「当前档位」吸附到相邻的一个网格档（与 adjustStreamVolume 接管一致），
+            // 保证每次按键恰好跳 1 段（~100/keySteps %），而非把绝对目标就近取整而跨档跳。
+            val raise = delta > 0
+            val target = if (raise) {
+                Prefs.nextKeyStepUp(current, levels, segs)
+            } else {
+                Prefs.nextKeyStepDown(current, levels, segs)
+            }
+            if (target == current || target == index) {
+                return chain.proceed() // 顶/底，或本就在正确的网格步上
+            }
+            if (target != sLastSnapLogged) {
+                sLastSnapLogged = target
+                XposedKit.log(
+                    "post-drag key snap: media $index -> $target (cur=$current, " +
+                        (if (raise) "up" else "down") + ")/$levels",
+                )
+            }
+            return chain.proceedWithReplaced(1, target)
+        } catch (t: Throwable) {
+            XposedKit.logErrorOnce("grid-snap", "media grid snap error: $t")
+            return chain.proceed()
+        }
+    }
+
+    /**
+     * 反射调用 `AudioService` 上的单 int 参方法并取 int 返回（getStreamVolume / getStreamMaxVolume）。
+     * 遍历类层次 + `setAccessible` 以兼容非 public（`getMethod` 只查 public →
+     * MiAudioService / AudioServiceBinderWrapper 上 NoSuchMethodException）。
+     */
+    @Throws(Throwable::class)
+    private fun invokeIntMethod(target: Any, name: String, arg: Int): Int {
+        val m = findIntMethod(target.javaClass, name)
+            ?: throw NoSuchMethodException("$name(int) not found on ${target.javaClass.name}")
+        m.isAccessible = true
+        val r = m.invoke(target, arg)
+        if (r is Int) {
+            return r
+        }
+        throw NoSuchMethodException("$name not returning int")
+    }
+
+    /** 在类层次中查找名字为 name、单个 int 参数的方法（任意可见性）；带 [sMethodCache] 缓存。 */
+    private fun findIntMethod(c: Class<*>, name: String): Method? {
+        val key = "M:" + c.name + "#" + name + "#(int)"
+        sMethodCache[key]?.let { return it.orElse(null) }
+        var cur: Class<*>? = c
+        var found: Method? = null
+        while (cur != null && cur != Any::class.java) {
+            try {
+                found = cur.getDeclaredMethod(name, Int::class.javaPrimitiveType)
+                break
+            } catch (e: NoSuchMethodException) {
+                cur = cur.superclass
+            }
+        }
+        sMethodCache[key] = Optional.ofNullable(found)
+        return found
+    }
+
+    /**
+     * 供 [mediaVolumeGridSnap]：读取当前媒体流逻辑档位（0~levels）。
+     * 优先用真实 [sAudioService] 实例（`AudioServiceBinderWrapper` 上无
+     * getStreamVolume），回退 `fallbackThis`；实例缺失返回 -1，反射失败记录后返回 -1。
+     */
+    private fun readMediaVolumeIndex(fallbackThis: Any?): Int {
+        val audioService = sAudioService ?: fallbackThis ?: return -1
+        return try {
+            invokeIntMethod(audioService, METHOD_GET_STREAM_VOLUME, Prefs.STREAM_MUSIC_INDEX)
+        } catch (t: Throwable) {
+            XposedKit.logErrorOnce("read-cur-vol", "read current media index failed: $t")
+            -1
+        }
+    }
+
+    /**
+     * 供 [mediaVolumeGridSnap]：读取媒体流**当前物理最大档位**（getStreamMaxVolume）。
+     * 必须与 [adjustStreamVolume] 同源（都取实时物理上限），**不能**用
+     * `config.mediaSteps`（那是「期望值」，改档位数后未重启框架时物理上限仍为旧值，
+     * 两者不一致会令两个 Hook 对网格刻度产生分歧而自激振荡）。实例缺失返回 -1，反射失败记录后返回 -1。
+     */
+    private fun readMediaMaxIndex(fallbackThis: Any?): Int {
+        val audioService = sAudioService ?: fallbackThis ?: return -1
+        return try {
+            invokeIntMethod(audioService, METHOD_GET_STREAM_MAX_VOLUME, Prefs.STREAM_MUSIC_INDEX)
+        } catch (t: Throwable) {
+            XposedKit.logErrorOnce("read-max-vol", "read media max index failed: $t")
+            -1
+        }
+    }
+
+    /**
+     * 反射调用 `AudioService#setStreamVolume(int, int, int)`：HyperOS 的 MiAudioService
+     * 继承 AudioService，该方法可能非 public（`getMethod` 只查 public → NoSuchMethodException）
+     * 或仅存在带 `callingPackage` 的重载。故遍历类层次查找名字为 setStreamVolume、
+     * 前 3 参为 int 的方法，优先参数最少者，`setAccessible` 后调用；多余参数按类型补默认值。
+     */
+    @Throws(Throwable::class)
+    private fun invokeSetStreamVolume(audioService: Any, streamType: Int, index: Int, flags: Int) {
+        val target = resolveSetStreamVolumeMethod(audioService.javaClass)
+        val p = target.parameterTypes
+        val args = arrayOfNulls<Any>(p.size)
+        args[0] = streamType
+        args[1] = index
+        args[2] = flags
+        for (i in 3 until p.size) {
+            val t = p[i]
+            args[i] = when {
+                t === String::class.java -> SET_VOLUME_CALLING_PACKAGE
+                t.isIntLike() -> 0
+                t.isBooleanLike() -> false
+                else -> null
+            }
+        }
+        target.invoke(audioService, *args)
+    }
+
+    /**
+     * 形参是否整型：基本型 `int` 或包装型 `Integer`。
+     *
+     * 包装型按类名比对，避免在 Kotlin 里直接引用 `java.lang.Integer`（编译器会提示改用
+     * `kotlin.Int`，而 `kotlin.Int::class.java` 拿到的正是基本型 `int`，无法覆盖包装型）。
+     */
+    private fun Class<*>.isIntLike(): Boolean =
+        this == Int::class.javaPrimitiveType || name == "java.lang.Integer"
+
+    /** 形参是否布尔型，取值方式同 [isIntLike]。 */
+    private fun Class<*>.isBooleanLike(): Boolean =
+        this == Boolean::class.javaPrimitiveType || name == "java.lang.Boolean"
+
+    /**
+     * 解析 setStreamVolume 目标方法（前 3 参为 int、优先参数最少重载），结果按声明类缓存于
+     * [sMethodCache]；未命中缓存 empty 并抛 [NoSuchMethodException]。行为与旧内联逻辑一致。
+     */
+    @Throws(Exception::class)
+    private fun resolveSetStreamVolumeMethod(startClass: Class<*>): Method {
+        val key = "M:" + startClass.name + "#" + METHOD_SET_STREAM_VOLUME + "#(iii..)"
+        sMethodCache[key]?.let {
+            return it.orElseThrow {
+                NoSuchMethodException(
+                    "$METHOD_SET_STREAM_VOLUME(int,int,int,...) not found on ${startClass.name}",
+                )
+            }
+        }
+        var target: Method? = null
+        var c: Class<*>? = startClass
+        while (c != null) {
+            for (m in c.declaredMethods) {
+                if (m.name != METHOD_SET_STREAM_VOLUME) {
+                    continue
+                }
+                val p = m.parameterTypes
+                if (p.size >= 3 && p[0] == Int::class.javaPrimitiveType &&
+                    p[1] == Int::class.javaPrimitiveType &&
+                    p[2] == Int::class.javaPrimitiveType &&
+                    (target == null || p.size < target.parameterTypes.size)
+                ) {
+                    m.isAccessible = true
+                    target = m
+                }
+            }
+            c = c.superclass
+        }
+        sMethodCache[key] = Optional.ofNullable(target)
+        return target ?: throw NoSuchMethodException(
+            "$METHOD_SET_STREAM_VOLUME(int,int,int,...) not found on ${startClass.name}",
+        )
+    }
+
+    /**
+     * 音量键步进 Hooker：仅对媒体流 RAISE/LOWER 生效，以当前级 ± delta 为新目标。
+     * 任何异常或不适用的调用一律 `chain.proceed()` 保留系统默认行为。
+     */
+    private fun adjustStreamVolume(chain: HookChain): Any? {
+        try {
+            val args = chain.args
+            if (!sAdjustEntryLogged) {
+                sAdjustEntryLogged = true
+                XposedKit.log(
+                    "key step hook fired (first): args=$args" +
+                        " this=" + chain.instance.javaClass.name,
+                )
+            }
+            if (args.size < 3 || args[0] !is Int || args[1] !is Int) {
+                return chain.proceed()
+            }
+            val streamType = args[0] as Int
+            val direction = args[1] as Int
+            val flags = if (args[2] is Int) args[2] as Int else 0
+            val raise = direction == AudioManager.ADJUST_RAISE
+            val lower = direction == AudioManager.ADJUST_LOWER
+            if (streamType != Prefs.STREAM_MUSIC_INDEX || (!raise && !lower)) {
+                return chain.proceed()
+            }
+            // HyperOS 音量键可能走 AudioService$AudioServiceBinderWrapper（其上无 getStreamMaxVolume 等
+            // 方法），故优先用真正的 AudioService 实例读写音量；缺失时回退到 chain.instance。
+            val audioService = sAudioService ?: chain.instance
+            val config = XposedKit.readConfig(XposedKit.systemServerContext(audioService))
+            if (config == null || !config.remapActive) {
+                return chain.proceed()
+            }
+            val keySteps = Prefs.clampKeySteps(config.keySteps)
+            val maxSteps = invokeIntMethod(audioService, METHOD_GET_STREAM_MAX_VOLUME, streamType)
+            val oldIndex = invokeIntMethod(audioService, METHOD_GET_STREAM_VOLUME, streamType)
+            if (maxSteps <= 0 || oldIndex < 0) {
+                return chain.proceed()
+            }
+            // 按当前位置吸附到 keySteps 网格：新目标 = 严格大于/小于当前的网格级，
+            // 避免固定 delta 累加造成的漂移（使滑块百分比落在 100/keySteps 的整数倍）。
+            val newIndex = (if (raise) {
+                Prefs.nextKeyStepUp(oldIndex, maxSteps, keySteps)
+            } else {
+                Prefs.nextKeyStepDown(oldIndex, maxSteps, keySteps)
+            })
+                .coerceIn(0, maxSteps)
+            if (newIndex == oldIndex) {
+                // 已到顶/底：交回系统处理（不强制变更）。
+                return chain.proceed()
+            }
+            if (!sAdjustFiredLogged) {
+                sAdjustFiredLogged = true
+                XposedKit.log(
+                    "key step applied: " + if (raise) "RAISE " else "LOWER " +
+                        "$oldIndex -> $newIndex levels=$maxSteps segs=$keySteps" +
+                        " (~${Math.round(newIndex * 100.0 / maxSteps)}%)",
+                )
+            } else {
+                XposedKit.log(
+                    "key step: " + if (raise) "+" else "-" + (newIndex - oldIndex) +
+                        " $oldIndex -> $newIndex",
+                )
+            }
+            invokeSetStreamVolume(audioService, streamType, newIndex, flags)
+            // 跳过原实现（它自带 ±1 或按 maxIndex/15 的步进），避免双算。
+            return null
+        } catch (t: Throwable) {
+            XposedKit.logErrorOnce("key-step-adjust", "adjustStreamVolume key step error: $t")
+            return chain.proceed()
+        }
+    }
+
+    /**
+     * 模式B 软件衰减曲线映射：
+     * `VolumeStreamState#setStreamVolumeIndex(index, device)` 是档位应用必经点。
+     *
+     *
+     * 仅模式B 在 system_server 侧修改音量（curve + 衰减乘数），
+     * 模式A 保持绝对音量，不在 system_server 干预。
+     */
+    private fun setStreamVolumeIndex(chain: HookChain): Any? {
+        val args = chain.args
+        try {
+            if (args.size < 2 || args[0] !is Int || args[1] !is Int) {
+                return chain.proceed()
+            }
+            val index = args[0] as Int
+            val device = args[1] as Int
+            if (index <= 0) {
+                return chain.proceed()
+            }
+            val state = chain.instance
+            if (XposedKit.getIntField(state, FIELD_STREAM_TYPE) != Prefs.STREAM_MUSIC_INDEX) {
+                return chain.proceed()
+            }
+            val audioService = try {
+                XposedKit.getField(state, FIELD_AUDIO_SERVICE)
+            } catch (t: Throwable) {
+                XposedKit.logErrorOnce("vss-this", "read VolumeStreamState.this\$0 failed: $t")
+                val fallback = sAudioService
+                if (fallback == null) {
+                    return chain.proceed()
+                }
+                fallback
+            }
+            val config = XposedKit.readConfig(XposedKit.systemServerContext(audioService))
+            if (config == null || !config.remapActive) {
+                return chain.proceed()
+            }
+            // 按输出设备分派：外放/有线/蓝牙各自按其模式在 system_server 改写档位；
+            // 蓝牙模式A（AVRCP）由蓝牙进程处理、该设备默认直通、未识别设备一律放行。
+            val d = OutputDevice.fromOutMask(device) ?: return chain.proceed()
+            // 总开关关闭或该设备默认=直通
+            val range = config.activeRangeFor(d) ?: return chain.proceed()
+            if (d.supportsAbsolute() && config.modeFor(d) == Prefs.BT_MODE_ABSOLUTE) {
+                return chain.proceed() // 蓝牙模式A 经 AVRCP，不在此衰减
+            }
+            val minStep = range.min
+            val maxStep = range.max
+            val curveType = range.curve
+            val maxSteps = XposedKit.getIntField(state, FIELD_INDEX_MAX) / 10
+            if (maxSteps <= 0) {
+                return chain.proceed()
+            }
+            val defaultMode = config.modeFor(d) == Prefs.BT_MODE_DEFAULT
+            // 模式B 满量程（0~maxSteps）无需衰减时直接放行；
+            // 默认模式已由 activeRangeFor 在满量程时返回 null 拦截，此处只需处理收窄。
+            if (!defaultMode && maxStep >= maxSteps && minStep <= 0) {
+                return chain.proceed()
+            }
+            // 默认：目标档位在 [min,max] 线性等分（无曲线）；模式B：按所选曲线直映射为系统档位。
+            val mapped = if (defaultMode) {
+                Avrcp.defaultRangeToIndex(index, maxSteps, minStep, maxStep)
+            } else {
+                Avrcp.curveToSystemIndex(index, maxSteps, minStep, maxStep, curveType)
+            }
+            // 仅在无需改变时放行；mapped>index 抬升低档位以生效「最小音量」下限，
+            // mapped<index 压低高档位以生效「最大音量」上限（软件衰减）。
+            if (mapped == index) {
+                return chain.proceed()
+            }
+            chain.proceedWithReplaced(0, mapped) // HAL 应用重映射后的增益（升/降）
+            // 恢复 mIndexMap 中的原始档位，避免 getStreamVolume 读回 remapped
+            // 后二次映射导致音量卡死（VOL_UP 无效）
+            try {
+                val map = XposedKit.getField(state, "mIndexMap")
+                if (map is MutableMap<*, *>) {
+                    @Suppress("UNCHECKED_CAST")
+                    (map as MutableMap<Int, Int>)[device] = index * 10
+                }
+            } catch (t: Throwable) {
+                XposedKit.logErrorOnce("restore-index-map", "restore mIndexMap failed: $t")
+            }
+            return null
+        } catch (t: Throwable) {
+            XposedKit.logOnce("vol-index-err", "setStreamVolumeIndex hook error: $t")
+            return chain.proceed()
+        }
+    }
+
+    /**
+     * 用新值替换指定位置的入参并继续调用链（等价旧 API 的
+     * `chain.proceed(args.toArray())` 改写参数写法）。
+     */
+    private fun HookChain.proceedWithReplaced(index: Int, value: Any?): Any? {
+        val newArgs = args.toTypedArray()
+        newArgs[index] = value
+        return proceed(newArgs)
+    }
+}
