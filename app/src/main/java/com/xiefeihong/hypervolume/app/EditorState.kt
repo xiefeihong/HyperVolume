@@ -28,8 +28,8 @@ enum class NativeAxis { STEPS, PERCENT }
 data class EditorState(
     /** 权威配置模型：编辑即时写入此处，持久化与推送都以此为准。 */
     val model: VolumeConfig,
-    /** 上一次成功写入系统（Settings.Global）的生效配置 XML，作为「未保存修改」比较基线。 */
-    val lastSavedXml: String = "",
+    /** 上一次成功写入系统（Settings.Global）的生效配置 JSON，作为「未保存修改」比较基线。 */
+    val lastSavedJson: String = "",
     /** 当前编辑的设备维度（对应顶部选项卡）。 */
     val editingDevice: OutputDevice = OutputDevice.SPEAKER,
     /** 当前滑条/曲线所代表的模式（ABSOLUTE 编辑 absolute 范围，SOFTWARE 编辑 software/默认范围）。 */
@@ -80,7 +80,7 @@ data class EditorState(
     val absoluteAllowed: Boolean get() = editingDevice.supportsAbsolute()
 
     /** 当前模型与已生效基线不一致（存在未保存修改）。 */
-    val hasUnsavedChanges: Boolean get() = model.toXml() != lastSavedXml
+    val hasUnsavedChanges: Boolean get() = model.toJson() != lastSavedJson
 
     /** 生效后的物理档位数：启用时=用户 [mediaSteps]，关闭时=系统默认；用于判定是否需重启系统框架。 */
     fun targetPhysicalSteps(cfg: VolumeConfig?): Int =
@@ -169,7 +169,7 @@ data class EditorState(
     fun changeNativeAxis(axis: NativeAxis): EditorState = copy(nativeAxis = axis)
 
     /** 标记本轮改动已成功写入系统（刷新「未保存修改」基线）。 */
-    fun markSaved(xml: String): EditorState = copy(lastSavedXml = xml)
+    fun markSaved(json: String): EditorState = copy(lastSavedJson = json)
 
     /** 采纳/重置整份配置后重载界面（等价旧 `applyConfigToPrefs` + `loadConfigIntoUi(false)`）。 */
     fun replaceModel(cfg: VolumeConfig): EditorState =
@@ -250,7 +250,7 @@ data class EditorState(
             systemDefaultSteps: Int,
             detectedDevice: OutputDevice?,
             keepDevice: OutputDevice = OutputDevice.SPEAKER,
-            lastSavedXml: String = "",
+            lastSavedJson: String = "",
         ): EditorState {
             val cfg = store.loadModel() ?: store.defaultConfig(systemDefaultSteps)
             val enabled = cfg.enabled
@@ -259,7 +259,7 @@ data class EditorState(
             val stepped = stepsWithFloor(media, key)
             val base = EditorState(
                 model = cfg,
-                lastSavedXml = lastSavedXml,
+                lastSavedJson = lastSavedJson,
                 editingDevice = detectedDevice ?: keepDevice,
                 enabled = enabled,
                 mediaSteps = stepped.first,

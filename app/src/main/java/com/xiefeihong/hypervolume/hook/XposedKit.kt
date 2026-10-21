@@ -427,7 +427,7 @@ object XposedKit {
         if (raw == sCachedRaw) {
             return sCachedConfig
         }
-        val config = VolumeConfig.fromXml(raw)
+        val config = VolumeConfig.fromJson(raw)
         if (config != null) {
             sCachedRaw = raw
             sCachedConfig = config

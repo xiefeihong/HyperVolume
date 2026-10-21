@@ -2,6 +2,7 @@ package com.xiefeihong.hypervolume.app
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.xiefeihong.hypervolume.core.Prefs
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -14,8 +15,12 @@ import java.util.Locale
  * 存档内容两块：
  *  - `prefs`：本模块 SharedPreferences 的全部键值（业务暂存配置 + 档位基线 + 语言/颜色等界面偏好），
  *    值带类型标记（SharedPreferences 支持 String/Int/Long/Boolean/StringSet 五种）；
- *  - `global`：系统侧**已生效**的配置 XML（`Settings.Global` 中本模块键的原文），
+ *  - `global`：系统侧**已生效**的配置 JSON（`Settings.Global` 中本模块键的内容），
  *    恢复时据此比对「有未保存的修改」，并可选回写系统。
+ *
+ * 配置本身就是一段 JSON，导出时一律**写成嵌套对象**（而非转义字符串），便于用户直接
+ * 查看与改档位；导入时对象再序列化回紧凑串写回偏好。解析不出对象的（无配置 / 畸形）
+ * 保持字符串，不静默丢数据。
  *
  * 解析与写回都是纯数据操作（不碰 root）；root 推送由调用方经 [SaveEngine.pushConfig] 完成，
  * 便于单测覆盖格式校验与类型还原。
@@ -25,8 +30,8 @@ class BackupEngine(context: Context, private val settings: SettingsStore) {
     private val appContext: Context = context.applicationContext
 
     /** 导出当前全部偏好 + 系统侧生效配置，返回可直接写盘的 JSON 文本。 */
-    fun export(effectiveXml: String): String =
-        BackupFormat.build(settings.allPreferences(), effectiveXml, appContext.packageName)
+    fun export(effectiveJson: String): String =
+        BackupFormat.build(settings.allPreferences(), effectiveJson, appContext.packageName)
 
     /**
      * 解析存档文本；格式不符（非本模块备份 / 版本过新 / 记录结构非法）抛
@@ -49,9 +54,10 @@ internal object BackupFormat {
     private const val FORMAT = "format"
     private const val FORMAT_VALUE = "HyperVolume-backup"
 
-    /** 存档结构版本（未来加字段时递增，过新的存档拒绝导入）。 */
+    /** 存档结构版本（未来加字段时递增，过新的存档拒绝导入）。
+     * v2：配置值由转义字符串改写成嵌套 JSON 对象（v1 存档仍可导入）。 */
     private const val VERSION = "version"
-    private const val BACKUP_VERSION = 1
+    private const val BACKUP_VERSION = 2
 
     private const val CREATED_AT = "createdAt"
     private const val PACKAGE = "package"
@@ -64,7 +70,7 @@ internal object BackupFormat {
     private val ISO_FORMAT = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
 
     /** 组装存档文本（不受支持的偏好类型由 [PreferenceCodec] 跳过）。 */
-    fun build(preferences: Map<String, Any?>, effectiveXml: String, packageName: String): String {
+    fun build(preferences: Map<String, Any?>, effectiveJson: String, packageName: String): String {
         val array = JSONArray()
         for ((key, value) in preferences) {
             PreferenceCodec.encode(key, value)?.let { array.put(it) }
@@ -75,7 +81,7 @@ internal object BackupFormat {
             put(CREATED_AT, ISO_FORMAT.format(Date()))
             put(PACKAGE, packageName)
             put(PREFS, array)
-            put(GLOBAL, effectiveXml)
+            put(GLOBAL, ConfigJson.toObject(effectiveJson))
         }.toString(INDENT)
     }
 
@@ -98,22 +104,39 @@ internal object BackupFormat {
         return BackupContent(
             recordCount = values.size,
             preferences = values,
-            effectiveXml = root.optString(GLOBAL, ""),
+            effectiveJson = ConfigJson.toText(root.opt(GLOBAL)),
         )
     }
+}
+
+/**
+ * 配置文本与存档对象的互转：配置（暂存键 / 生效键）本身就是一段 JSON，
+ * 导出时写成嵌套对象便于阅读与手工修改，导入时再序列化回紧凑串恢复成字符串偏好。
+ *
+ * 解析失败（空串、畸形、旧版直存文本）一律原样保留字符串，不静默丢数据。
+ */
+internal object ConfigJson {
+
+    /** 文本 → 可解析则返回 [JSONObject]，否则返回原文（供 `JSONObject.put` 直接写入）。 */
+    fun toObject(text: String): Any =
+        runCatching { JSONObject(text) }.getOrElse { text }
+
+    /** 存档里的值（对象或字符串）→ 配置文本；缺失返回空串。 */
+    fun toText(value: Any?): String =
+        if (value == null || value === JSONObject.NULL) "" else value.toString()
 }
 
 /** 一份解析完成的备份内容。 */
 data class BackupContent(
     val recordCount: Int,
     val preferences: Map<String, Any?>,
-    /** 备份时的系统侧生效配置 XML（空串表示备份时无 root / 无配置）。 */
-    val effectiveXml: String,
+    /** 备份时的系统侧生效配置 JSON（空串表示备份时无 root / 无配置）。 */
+    val effectiveJson: String,
 )
 
 /**
  * SharedPreferences 值的 JSON 编解码：以单字符类型标记保住强类型
- * （`config_xml` 是 String、`system_default_steps` 是 Int、`system_default_ack` 是 Boolean）。
+ * （`config_json` 是 String、`system_default_steps` 是 Int、`system_default_ack` 是 Boolean）。
  */
 internal object PreferenceCodec {
 
@@ -131,7 +154,8 @@ internal object PreferenceCodec {
     /** 单条记录 → JSON；类型不受支持（理论上不会发生）返回 null 由调用方跳过。 */
     fun encode(key: String, value: Any?): JSONObject? = when (value) {
         null -> null
-        is String -> JSONObject().put(KEY, key).put(TYPE, TYPE_STRING).put(VALUE, value)
+        is String -> JSONObject().put(KEY, key).put(TYPE, TYPE_STRING)
+            .put(VALUE, stringValue(key, value))
         is Int -> JSONObject().put(KEY, key).put(TYPE, TYPE_INT).put(VALUE, value)
         is Long -> JSONObject().put(KEY, key).put(TYPE, TYPE_LONG).put(VALUE, value)
         is Float -> JSONObject().put(KEY, key).put(TYPE, TYPE_FLOAT).put(VALUE, value.toDouble())
@@ -141,13 +165,20 @@ internal object PreferenceCodec {
         else -> null
     }
 
+    /**
+     * 字符串值的写出形式：配置暂存键的值本身就是一段 JSON，写成对象可读可改；
+     * 其余字符串（语言 tag 等）保持字符串。
+     */
+    private fun stringValue(key: String, value: String): Any =
+        if (key == Prefs.KEY_CONFIG_JSON) ConfigJson.toObject(value) else value
+
     /** 单条 JSON → 键值；结构非法或类型未知返回 null（跳过该条，不影响其余记录）。 */
     fun decode(entry: JSONObject?): Pair<String, Any?>? {
         val key = entry?.optString(KEY)?.takeIf { it.isNotEmpty() } ?: return null
         // optString 对 JSON null 返回 "null" 字面量，这里一并挡掉
         if (key == "null") return null
         val value: Any? = when (entry.optString(TYPE)) {
-            TYPE_STRING -> entry.optString(VALUE)
+            TYPE_STRING -> ConfigJson.toText(entry.opt(VALUE))
             TYPE_INT -> entry.optInt(VALUE)
             TYPE_LONG -> entry.optLong(VALUE)
             TYPE_FLOAT -> entry.optDouble(VALUE).toFloat()

@@ -7,7 +7,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * [VolumeConfig] 的 XML 序列化/解析往返、畸形输入回落、构造期钳制与 XXE 加固的 JVM 单元测试。
+ * [VolumeConfig] 的 JSON 序列化/解析往返、畸形输入回落、构造期钳制的 JVM 单元测试。
+ *
+ * 紧凑串是「两次序列化可比对」的差异基线，故其键序与字面形式一并锁死。
  */
 class VolumeConfigTest {
 
@@ -22,26 +24,52 @@ class VolumeConfigTest {
     )
 
     @Test
-    fun xmlRoundTrip_stable() {
+    fun jsonRoundTrip_stable() {
         val c = sample()
-        val xml = c.toXml()
-        val back = VolumeConfig.fromXml(xml)
+        val json = c.toJson()
+        val back = VolumeConfig.fromJson(json)
         assertNotNull(back)
-        assertEquals(xml, back!!.toXml())
+        assertEquals(json, back!!.toJson())
     }
 
     @Test
-    fun prettyXml_parsesEquivalentToCompact() {
+    fun prettyJson_parsesEquivalentToCompact() {
         val c = sample()
-        val compact = c.toXml()
-        val fromPretty = VolumeConfig.fromXml(c.toPrettyXml())
+        val compact = c.toJson()
+        val fromPretty = VolumeConfig.fromJson(c.toPrettyJson())
         assertNotNull(fromPretty)
-        assertEquals(compact, fromPretty!!.toXml())
+        assertEquals(compact, fromPretty!!.toJson())
+        assertTrue(c.toPrettyJson().startsWith("{\n  \"enabled\": true,"))
+    }
+
+    @Test
+    fun compactJsonShapeIsLocked() {
+        val c = VolumeConfig(
+            true, 50, 15,
+            dev(Prefs.BT_MODE_DEFAULT, Range(0, 127, 0), Range(0, 100, 0), Range(0, 50, 0)),
+            dev(Prefs.BT_MODE_SOFTWARE, Range(0, 127, 0), Range(1, 40, 1), Range(0, 100, 0)),
+            dev(Prefs.BT_MODE_ABSOLUTE, Range(10, 127, 2), Range(0, 100, 0), Range(0, 100, 0)),
+        )
+        // 键序固定（写出器手写，不受 JSONObject 的 HashMap 顺序影响）；模式A 范围仅蓝牙写。
+        assertEquals(
+            "{\"enabled\":true,\"mediaSteps\":50,\"keySteps\":15,\"devices\":{" +
+                "\"speaker\":{\"mode\":0," +
+                "\"b\":{\"min\":0,\"max\":100,\"curve\":0}," +
+                "\"d\":{\"min\":0,\"max\":50,\"curve\":0}}," +
+                "\"wired\":{\"mode\":2," +
+                "\"b\":{\"min\":1,\"max\":40,\"curve\":1}," +
+                "\"d\":{\"min\":0,\"max\":100,\"curve\":0}}," +
+                "\"bt\":{\"mode\":1," +
+                "\"a\":{\"min\":10,\"max\":127,\"curve\":2}," +
+                "\"b\":{\"min\":0,\"max\":100,\"curve\":0}," +
+                "\"d\":{\"min\":0,\"max\":100,\"curve\":0}}}}",
+            c.toJson(),
+        )
     }
 
     @Test
     fun fieldsPreservedAcrossRoundTrip() {
-        val back = VolumeConfig.fromXml(sample().toXml())
+        val back = VolumeConfig.fromJson(sample().toJson())
         assertNotNull(back)
         assertTrue(back!!.enabled)
         assertEquals(100, back.mediaSteps)
@@ -55,21 +83,60 @@ class VolumeConfigTest {
 
     @Test
     fun malformedOrNullReturnsNull() {
-        assertNull(VolumeConfig.fromXml(null))
-        assertNull(VolumeConfig.fromXml("   "))
-        assertNull(VolumeConfig.fromXml("<notconfig enabled=\"1\"/>")) // 根标签非 config
-        assertNull(VolumeConfig.fromXml("<<<broken>>>")) // 解析异常
+        assertNull(VolumeConfig.fromJson(null))
+        assertNull(VolumeConfig.fromJson("   "))
+        assertNull(VolumeConfig.fromJson("""{"foo":1}""")) // 无任一模块顶层键 = 不是本模块配置
+        assertNull(VolumeConfig.fromJson("[1,2,3]")) // 根为数组
+        assertNull(VolumeConfig.fromJson("not json")) // 解析异常
     }
 
     @Test
     fun missingFieldsFallBackToDefaults() {
-        val back = VolumeConfig.fromXml("<config enabled=\"1\"></config>")
+        val back = VolumeConfig.fromJson("""{"enabled":true}""")
         assertNotNull(back)
         assertTrue(back!!.enabled)
         assertEquals(Prefs.MEDIA_STEPS_DEFAULT, back.mediaSteps)
         assertEquals(Prefs.KEY_STEP_DEFAULT, back.keySteps)
-        // 无 <device> 子节点 → 各设备回落默认直通模式
+        // 无 devices 子对象 → 各设备回落默认直通模式
         assertEquals(Prefs.BT_MODE_DEFAULT, back.modeFor(OutputDevice.BT))
+    }
+
+    @Test
+    fun tolerantToHandEditedValues() {
+        // 手工改配置常把布尔写成 1/0、把数字写成字符串；未知键忽略不影响其余字段
+        val back = VolumeConfig.fromJson(
+            """{"enabled":1,"mediaSteps":"50","keySteps":"20","note":"hi",""" +
+                """"devices":{"bt":{"mode":"2","b":{"min":"1","max":40}}}}""",
+        )
+        assertNotNull(back)
+        assertTrue(back!!.enabled)
+        assertEquals(50, back.mediaSteps)
+        assertEquals(20, back.keySteps)
+        assertEquals(Prefs.BT_MODE_SOFTWARE, back.modeFor(OutputDevice.BT))
+        assertEquals(Range(1, 40, Prefs.CURVE_TYPE_DEFAULT), back.bluetooth.software)
+    }
+
+    @Test
+    fun outOfRangeFieldsAreClampedOnParse() {
+        val back = VolumeConfig.fromJson(
+            """{"enabled":true,"mediaSteps":9999,"keySteps":0,"devices":{"bt":{"mode":7,""" +
+                """"a":{"min":-5,"max":999,"curve":42}}}}""",
+        )
+        assertNotNull(back)
+        assertEquals(Prefs.MEDIA_STEPS_MAX, back!!.mediaSteps)
+        assertEquals(Prefs.KEY_STEP_MIN, back.keySteps)
+        // 非法模式回落默认；范围端点按 AVRCP 口径钳到 0~127，曲线钳到 0~2
+        assertEquals(Prefs.BT_MODE_DEFAULT, back.modeFor(OutputDevice.BT))
+        assertEquals(Range(0, Prefs.AVRCP_MAX_VOLUME, Prefs.CURVE_SQRT), back.bluetooth.absolute)
+    }
+
+    @Test
+    fun unsupportedAbsoluteModeOnNonBluetoothFallsBackToSoftware() {
+        val back = VolumeConfig.fromJson(
+            """{"enabled":true,"devices":{"speaker":{"mode":1,"a":{"min":0,"max":9,"curve":0}}}}""",
+        )
+        assertNotNull(back)
+        assertEquals(Prefs.BT_MODE_SOFTWARE, back!!.modeFor(OutputDevice.SPEAKER))
     }
 
     @Test
@@ -85,10 +152,18 @@ class VolumeConfigTest {
     }
 
     @Test
-    fun doctypeRejectedForXxe() {
-        val evil = "<?xml version=\"1.0\"?>" +
-            "<!DOCTYPE config [<!ENTITY x \"y\">]>" +
-            "<config enabled=\"1\" mediaSteps=\"100\" keySteps=\"25\"/>"
-        assertNull(VolumeConfig.fromXml(evil)) // disallow-doctype-decl → 解析异常 → null
+    fun nestedEmptyObjectsDoNotCrash() {
+        // 手写配置留下的空对象：范围缺失回落默认，不抛异常
+        val back = VolumeConfig.fromJson("""{"enabled":true,"devices":{"bt":{}}}""")
+        assertNotNull(back)
+        assertEquals(Prefs.BT_MODE_DEFAULT, back!!.modeFor(OutputDevice.BT))
+        assertEquals(FALLBACK_ABSOLUTE, back.bluetooth.absolute)
+    }
+
+    private companion object {
+        /** 模式A 范围缺失时的兜底（AVRCP 满量程 + 默认曲线）。 */
+        val FALLBACK_ABSOLUTE = Range(
+            Prefs.ABS_VOLUME_MIN_DEFAULT, Prefs.ABS_VOLUME_MAX_DEFAULT, Prefs.CURVE_TYPE_DEFAULT,
+        )
     }
 }

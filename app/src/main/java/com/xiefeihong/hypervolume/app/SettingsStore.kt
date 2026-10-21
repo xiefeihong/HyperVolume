@@ -30,13 +30,6 @@ class SettingsStore(context: Context) {
             prefs.edit().putInt(Prefs.KEY_THEME_MODE, value.stored).apply()
         }
 
-    /** 设置页标签位（记忆界面位置，重启后回到上次的标签）。 */
-    var settingsTab: Int
-        get() = prefs.getInt(Prefs.KEY_SETTINGS_TAB, Prefs.SETTINGS_TAB_DEFAULT)
-        set(value) {
-            prefs.edit().putInt(Prefs.KEY_SETTINGS_TAB, value).apply()
-        }
-
     /** 本模块写入的全部本地偏好（含业务配置），供备份导出。 */
     fun allPreferences(): Map<String, *> = prefs.all
 

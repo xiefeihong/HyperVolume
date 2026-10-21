@@ -32,7 +32,7 @@ data class DebugSnapshot(
     val stepsSource: StepsSource,
     /** `Settings.Global` 中本模块键的原文（空串表示无）。 */
     val effectiveConfig: String,
-    /** 应用内暂存配置 XML（空串表示无）。 */
+    /** 应用内暂存配置 JSON（空串表示无）。 */
     val stagedConfig: String,
     val logPaths: List<String>,
 )
@@ -111,7 +111,7 @@ class DebugInfoCollector(
             framework = "libxposed API $XPOSED_API_VERSION",
             stepsSource = probe.stepsSource(),
             effectiveConfig = effective,
-            stagedConfig = store.rawXml(),
+            stagedConfig = store.rawJson(),
             logPaths = listOf(Shell.SYS_LOG_FILE, Shell.BT_LOG_FILE, "/data/adb/lspd/log/"),
         )
     }

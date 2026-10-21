@@ -1,20 +1,20 @@
 package com.xiefeihong.hypervolume.core
 
 import android.util.Log
-import org.w3c.dom.Element
-import java.io.StringReader
-import javax.xml.parsers.DocumentBuilderFactory
-import org.xml.sax.InputSource
+import org.json.JSONObject
 
 /**
  * 音量配置的不可变值对象（纯逻辑，禁止引用任何 Xposed API）。
  *
  * 按「外放 / 有线 / 蓝牙」三设备各自持有一份 [DeviceConfig]（生效模式 + 模式A/B 范围），
- * 加全局的启用开关、档位数、音量键步进。整体以**自描述 XML** 序列化，供 App 单键持久化
+ * 加全局的启用开关、档位数、音量键步进。整体以**自描述 JSON** 序列化，供 App 单键持久化
  * 与跨进程（Settings.Global / 镜像文件 / boot 脚本）传递。
  *
- * **不兼容任何历史格式**：位置式 `;` 串已彻底删除，全链路只认 XML。[fromXml] 解析失败或
- * 字段缺失一律回落到默认值。
+ * **不兼容任何历史格式**：位置式 `;` 串与早前的 XML 均已删除，全链路只认 JSON。
+ * [fromJson] 解析失败或字段缺失一律回落到默认值。
+ *
+ * 写出用 [JsonBuilder]（手写、键序固定、零依赖，紧凑串可直接用作差异比对基线），
+ * 读入用框架自带的 [JSONObject]（system_server / 蓝牙进程均可用，无需引入第三方 JSON）。
  *
  * 与 [Prefs]/[Avrcp]/[VolumeMode]/[DeviceConfig] 一样同时被 App 进程与 Hook 端
  * （system_server / 蓝牙进程）使用。
@@ -146,37 +146,61 @@ class VolumeConfig(
             ",wired=" + deviceDesc(wired) +
             ",bt=" + deviceDesc(bluetooth)
 
-    // ==================== XML 序列化 ====================
+    // ==================== JSON 序列化 ====================
 
     /**
-     * 序列化为紧凑单行 XML。每设备始终写模式B 范围 `<b>` 与默认范围 `<d>`；
-     * 仅蓝牙额外写模式A 范围 `<a>`。用于 SharedPreferences 暂存与差异比对（稳定、无换行）。
+     * 序列化为紧凑单行 JSON（无空白、键序固定）。供 SharedPreferences 暂存与差异比对基线
+     * （两次序列化相等即内容一致，与排版无关）。
      */
-    fun toXml(): String = buildXml(false)
+    fun toJson(): String = buildJson(false)
 
     /**
-     * 序列化为缩进多行的可读 XML，内容与 [toXml] 解析等价，仅排版不同。供写入
+     * 序列化为缩进两空格的易读 JSON，内容与 [toJson] 解析等价，仅排版不同。供写入
      * `Settings.Global` 与镜像文件，便于人工 `cat`/`settings get` 直接查看。
      * 全程只用双引号、不含单引号，可安全嵌入 `settings put global '<v>'` 与 `echo '<v>'`
      * （POSIX 单引号原样保留其中的换行）。
      */
-    fun toPrettyXml(): String = buildXml(true)
+    fun toPrettyJson(): String = buildJson(true)
 
-    private fun buildXml(pretty: Boolean): String {
-        val nl = if (pretty) "\n" else ""
-        val i1 = if (pretty) "  " else ""
-        val i2 = if (pretty) "    " else ""
-        val sb = StringBuilder(if (pretty) 512 else 256)
-        sb.append('<').append(TAG_ROOT)
-            .append(" enabled=\"").append(if (enabled) 1 else 0)
-            .append("\" mediaSteps=\"").append(Prefs.clampMediaSteps(mediaSteps))
-            .append("\" keySteps=\"").append(Prefs.clampKeySteps(keySteps))
-            .append(if (pretty) "\">\n" else "\">")
-        appendDevice(sb, "speaker", speaker, false, i1, i2, nl)
-        appendDevice(sb, "wired", wired, false, i1, i2, nl)
-        appendDevice(sb, "bt", bluetooth, true, i1, i2, nl)
-        sb.append("</").append(TAG_ROOT).append('>')
-        return sb.toString()
+    private fun buildJson(pretty: Boolean): String {
+        val json = JsonBuilder(pretty)
+        json.obj {
+            bool(KEY_ENABLED, enabled)
+            int(KEY_MEDIA_STEPS, Prefs.clampMediaSteps(mediaSteps))
+            int(KEY_KEY_STEPS, Prefs.clampKeySteps(keySteps))
+            obj(KEY_DEVICES) {
+                device(KEY_SPEAKER, speaker, false)
+                device(KEY_WIRED, wired, false)
+                device(KEY_BT, bluetooth, true)
+            }
+        }
+        return json.build()
+    }
+
+    /** 写单设备：模式 + 模式B/默认 两套范围；[withAbsolute]（仅蓝牙）额外写模式A 范围。 */
+    private fun JsonBuilder.device(name: String, c: DeviceConfig, withAbsolute: Boolean) {
+        obj(name) {
+            int(KEY_MODE, c.mode)
+            if (withAbsolute) {
+                range(KEY_ABSOLUTE, c.absolute, Prefs.AVRCP_MAX_VOLUME)
+            }
+            range(KEY_SOFTWARE, c.software, Prefs.MEDIA_STEPS_MAX)
+            range(KEY_DEFAULT, c.defaultRange, Prefs.MEDIA_STEPS_MAX)
+        }
+    }
+
+    /**
+     * 写单个范围。[hi] 决定端点 clamp 口径：AVRCP（[Prefs.AVRCP_MAX_VOLUME]）或
+     * 系统档位（[Prefs.MEDIA_STEPS_MAX]）——两者现值域不重叠（当前上限 100<127）故等价，
+     * 按口径区分避免未来放宽档位数上限时静默截断。
+     */
+    private fun JsonBuilder.range(key: String, r: Range?, hi: Int) {
+        val safe = r ?: FALLBACK_RANGE
+        obj(key) {
+            int(KEY_MIN, safe.min.coerceAtLeast(0))
+            int(KEY_MAX, safe.max.coerceIn(0, hi))
+            int(KEY_CURVE, Prefs.clampCurve(safe.curve))
+        }
     }
 
     /**
@@ -195,10 +219,24 @@ class VolumeConfig(
 
     companion object {
 
-        private const val TAG_ROOT = "config"
-        private const val TAG_DEVICE = "device"
+        // ==== JSON 键名（写出与读入共用，避免字面量漂移） ====
 
-        /** 缺字段时的兜底范围（App 正常写入总会给出完整三元组，此处仅防御畸形 XML）。 */
+        private const val KEY_ENABLED = "enabled"
+        private const val KEY_MEDIA_STEPS = "mediaSteps"
+        private const val KEY_KEY_STEPS = "keySteps"
+        private const val KEY_DEVICES = "devices"
+        private const val KEY_SPEAKER = "speaker"
+        private const val KEY_WIRED = "wired"
+        private const val KEY_BT = "bt"
+        private const val KEY_MODE = "mode"
+        private const val KEY_ABSOLUTE = "a"
+        private const val KEY_SOFTWARE = "b"
+        private const val KEY_DEFAULT = "d"
+        private const val KEY_MIN = "min"
+        private const val KEY_MAX = "max"
+        private const val KEY_CURVE = "curve"
+
+        /** 缺字段时的兜底范围（App 正常写入总会给出完整三元组，此处仅防御畸形 JSON）。 */
         private val FALLBACK_RANGE = Range(
             Prefs.ABS_VOLUME_MIN_DEFAULT, Prefs.ABS_VOLUME_MAX_DEFAULT, Prefs.CURVE_TYPE_DEFAULT,
         )
@@ -217,148 +255,95 @@ class VolumeConfig(
             DeviceConfig(Prefs.BT_MODE_DEFAULT, FALLBACK_RANGE, FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE),
         )
 
-        // ==================== XML 写入辅助（供 buildXml） ====================
-
-        private fun appendDevice(
-            sb: StringBuilder, name: String, c: DeviceConfig, withAbsolute: Boolean,
-            i1: String, i2: String, nl: String,
-        ) {
-            sb.append(i1).append('<').append(TAG_DEVICE)
-                .append(" name=\"").append(name)
-                .append("\" mode=\"").append(c.mode).append("\">").append(nl)
-            if (withAbsolute) {
-                appendRange(sb, 'a', c.absolute, i2, nl, true)
-            }
-            appendRange(sb, 'b', c.software, i2, nl, false)
-            appendRange(sb, 'd', c.defaultRange, i2, nl, false)
-            sb.append(i1).append("</").append(TAG_DEVICE).append('>').append(nl)
-        }
-
         /**
-         * 写单个范围元素。[absolute] 决定端点 clamp 口径：true＝AVRCP（0~[Prefs.AVRCP_MAX_VOLUME]），
-         * false＝系统档位（0~[Prefs.MEDIA_STEPS_MAX]）。两者现值域不重叠（当前上限 100<127）故等价，
-         * 按口径区分避免未来放宽档位数上限时静默截断。
-         */
-        private fun appendRange(
-            sb: StringBuilder, tag: Char, r: Range?, i2: String, nl: String, absolute: Boolean,
-        ) {
-            val safe = r ?: FALLBACK_RANGE
-            val hi = if (absolute) Prefs.AVRCP_MAX_VOLUME else Prefs.MEDIA_STEPS_MAX
-            val min = safe.min.coerceAtLeast(0)
-            val max = safe.max.coerceIn(0, hi)
-            sb.append(i2).append('<').append(tag)
-                .append(" min=\"").append(min)
-                .append("\" max=\"").append(max)
-                .append("\" curve=\"").append(Prefs.clampCurve(safe.curve))
-                .append("\"/>").append(nl)
-        }
-
-        // ==================== XML 反序列化 ====================
-
-        /**
-         * 解析配置 XML。字段缺失按默认值、未知标签忽略；[xml] 为 null/空白、解析异常或根标签
-         * 非 `config` 时返回 `null`（调用方回落默认配置）。
+         * 解析配置 JSON。字段缺失按默认值、未知键忽略；[json] 为 null/空白、解析异常，
+         * 或不含任何本模块顶层键（不是本模块的配置）时返回 `null`（调用方回落默认配置）。
          */
         @JvmStatic
-        fun fromXml(xml: String?): VolumeConfig? {
-            if (xml == null) {
+        fun fromJson(json: String?): VolumeConfig? {
+            if (json == null) {
                 return null
             }
-            val trimmed = xml.trim()
+            val trimmed = json.trim()
             if (trimmed.isEmpty()) {
                 return null
             }
             return try {
-                val factory = DocumentBuilderFactory.newInstance()
-                factory.isNamespaceAware = false
-                // XXE 加固：输入源自 Settings.Global / 镜像文件（非完全可信），禁用 DTD 与外部实体，
-                // 避免外部实体解析或实体膨胀（billion laughs）拖垮 system_server / 蓝牙进程的 hook 回调。
-                // 每项单独 try-catch：内置 parser 若不支持该 feature 则跳过，不影响解析主流程。
-                safeFeature(factory, "http://apache.org/xml/features/disallow-doctype-decl", true)
-                safeFeature(factory, "http://xml.org/sax/features/external-general-entities", false)
-                safeFeature(factory, "http://xml.org/sax/features/external-parameter-entities", false)
-                val doc = factory.newDocumentBuilder().parse(InputSource(StringReader(trimmed)))
-                val root = doc.documentElement ?: return null
-                if (root.tagName != TAG_ROOT) {
+                val root = JSONObject(trimmed)
+                if (!isConfigObject(root)) {
                     return null
                 }
-                val enabled = intAttr(root, "enabled", 0) != 0
-                val mediaSteps = Prefs.clampMediaSteps(
-                    intAttr(root, "mediaSteps", Prefs.MEDIA_STEPS_DEFAULT),
-                )
-                val keySteps = Prefs.clampKeySteps(
-                    intAttr(root, "keySteps", Prefs.KEY_STEP_DEFAULT),
-                )
+                val devices = root.optJSONObject(KEY_DEVICES)
                 VolumeConfig(
-                    enabled, mediaSteps, keySteps,
-                    readDevice(root, "speaker", false),
-                    readDevice(root, "wired", false),
-                    readDevice(root, "bt", true),
+                    boolField(root, KEY_ENABLED, false),
+                    Prefs.clampMediaSteps(
+                        intField(root, KEY_MEDIA_STEPS, Prefs.MEDIA_STEPS_DEFAULT),
+                    ),
+                    Prefs.clampKeySteps(
+                        intField(root, KEY_KEY_STEPS, Prefs.KEY_STEP_DEFAULT),
+                    ),
+                    readDevice(devices, KEY_SPEAKER, false),
+                    readDevice(devices, KEY_WIRED, false),
+                    readDevice(devices, KEY_BT, true),
                 )
             } catch (t: Throwable) {
-                Log.e(LOG_TAG, "VolumeConfig.fromXml parse failed", t)
+                Log.e(LOG_TAG, "VolumeConfig.fromJson parse failed", t)
                 null
             }
         }
 
-        private fun safeFeature(factory: DocumentBuilderFactory, name: String, value: Boolean) {
-            try {
-                factory.setFeature(name, value)
-            } catch (ignored: Throwable) {
-            }
-        }
+        /** 顶层四个键一个都没有 = 不是本模块的配置（拒绝无关 JSON 被当成空配置生效）。 */
+        private fun isConfigObject(root: JSONObject): Boolean =
+            root.has(KEY_ENABLED) || root.has(KEY_MEDIA_STEPS) ||
+                root.has(KEY_KEY_STEPS) || root.has(KEY_DEVICES)
 
-        /** 读取指定 name 的设备元素；缺失时给出默认（直通 + 兜底范围）。 */
-        private fun readDevice(root: Element, name: String, withAbsolute: Boolean): DeviceConfig {
-            val el = findDevice(root, name) ?: return DeviceConfig(
+        /** 读取指定 name 的设备；缺失时给出默认（直通 + 兜底范围）。 */
+        private fun readDevice(devices: JSONObject?, name: String, withAbsolute: Boolean): DeviceConfig {
+            val el = devices?.optJSONObject(name) ?: return DeviceConfig(
                 Prefs.BT_MODE_DEFAULT, FALLBACK_RANGE, FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE,
             )
-            val rawMode = intAttr(el, "mode", Prefs.BT_MODE_DEFAULT)
-            val mode = normalizeMode(rawMode, withAbsolute)
-            val absolute = if (withAbsolute) readRange(el, "a", true) else FALLBACK_RANGE
-            val software = readRange(el, "b", false)
-            val defaultRange = readRange(el, "d", DEFAULT_FALLBACK_RANGE, false)
+            val mode = normalizeMode(intField(el, KEY_MODE, Prefs.BT_MODE_DEFAULT), withAbsolute)
+            val absolute = if (withAbsolute) {
+                readRange(el, KEY_ABSOLUTE, FALLBACK_RANGE, Prefs.AVRCP_MAX_VOLUME)
+            } else {
+                FALLBACK_RANGE
+            }
+            val software = readRange(el, KEY_SOFTWARE, FALLBACK_RANGE, Prefs.MEDIA_STEPS_MAX)
+            val defaultRange = readRange(el, KEY_DEFAULT, DEFAULT_FALLBACK_RANGE, Prefs.MEDIA_STEPS_MAX)
             return DeviceConfig(mode, absolute, software, defaultRange)
         }
 
-        private fun findDevice(root: Element, name: String): Element? {
-            val nodes = root.getElementsByTagName(TAG_DEVICE)
-            for (i in 0 until nodes.length) {
-                val node = nodes.item(i)
-                if (node is Element && node.getAttribute("name") == name) {
-                    return node
-                }
+        /** 读取指定键的范围；缺失或非对象回落 [fallback]。[hi] 为端点 clamp 上限（同 [range]）。 */
+        private fun readRange(parent: JSONObject, key: String, fallback: Range, hi: Int): Range {
+            val o = parent.optJSONObject(key) ?: return fallback
+            val min = intField(o, KEY_MIN, Prefs.ABS_VOLUME_MIN_DEFAULT).coerceAtLeast(0)
+            val max = intField(o, KEY_MAX, hi).coerceIn(0, hi)
+            val curve = Prefs.clampCurve(intField(o, KEY_CURVE, Prefs.CURVE_TYPE_DEFAULT))
+            return Range(min, max, curve)
+        }
+
+        /** 整数字段：容忍数字与字符串两种写法（人工改配置常写成 `"min": "10"`）。 */
+        private fun intField(o: JSONObject, key: String, def: Int): Int {
+            val v = o.opt(key)
+            return when {
+                v is Number -> v.toInt()
+                v is String -> v.trim().toIntOrNull() ?: def
+                else -> def
             }
-            return null
         }
 
         /**
-         * 读取指定标签的范围；缺失回落 [FALLBACK_RANGE]。[absolute] 决定 clamp 口径：
-         * true＝AVRCP（0~[Prefs.AVRCP_MAX_VOLUME]），false＝系统档位（0~[Prefs.MEDIA_STEPS_MAX]）。
+         * 布尔字段：容忍 `true`/`false` 与历史的 `1`/`0`（含字符串写法），
+         * 避免手工编辑或旧数据把开关读成 false。
          */
-        private fun readRange(parent: Element, tag: String, absolute: Boolean): Range =
-            readRange(parent, tag, FALLBACK_RANGE, absolute)
-
-        /** 读取指定标签的范围；缺失回落 [fallback]。[absolute] 同上。 */
-        private fun readRange(parent: Element, tag: String, fallback: Range, absolute: Boolean): Range {
-            val hi = if (absolute) Prefs.AVRCP_MAX_VOLUME else Prefs.MEDIA_STEPS_MAX
-            val list = parent.getElementsByTagName(tag)
-            for (i in 0 until list.length) {
-                val el = list.item(i) as? Element ?: continue
-                val min = intAttr(el, "min", Prefs.ABS_VOLUME_MIN_DEFAULT).coerceAtLeast(0)
-                val max = intAttr(el, "max", hi).coerceIn(0, hi)
-                val curve = Prefs.clampCurve(intAttr(el, "curve", Prefs.CURVE_TYPE_DEFAULT))
-                return Range(min, max, curve)
+        private fun boolField(o: JSONObject, key: String, def: Boolean): Boolean {
+            val v = o.opt(key)
+            return when {
+                v is Boolean -> v
+                v is Number -> v.toInt() != 0
+                v is String -> v.trim().let { it == "1" || it.equals("true", ignoreCase = true) }
+                else -> def
             }
-            return fallback
-        }
-
-        private fun intAttr(el: Element, name: String, def: Int): Int {
-            val v = el.getAttribute(name)
-            if (v.isNullOrEmpty()) {
-                return def
-            }
-            return v.trim().toIntOrNull() ?: def
         }
 
         /**
@@ -372,4 +357,71 @@ class VolumeConfig(
             else -> Prefs.BT_MODE_DEFAULT
         }
     }
+}
+
+/**
+ * 极简 JSON 写出器（只写本模块配置需要的 `对象 / 整数 / 布尔`，不支持转义与数组）。
+ *
+ * 刻意不用 `JSONObject` 写出：其 JVM 实现按 `HashMap` 迭代，键序不稳定，而紧凑串要
+ * 充当「两次序列化可比对」的差异基线、格式化串要给人读，键序必须固定。
+ *
+ * [pretty] 为真时缩进两空格并换行，为假时输出无空白的单行串。
+ */
+private class JsonBuilder(private val pretty: Boolean) {
+
+    private val sb = StringBuilder(if (pretty) 640 else 256)
+    private var indent = 0
+
+    /** 当前层是否已写过成员（决定下一个成员前是否补逗号）。 */
+    private var hasMember = false
+
+    /** 格式化模式下刚开一个对象：首个成员前要先换行，否则成员会挤在 `{` 同一行。 */
+    private var freshOpen = false
+
+    fun build(): String = sb.toString()
+
+    /** 写一个对象成员；[key] 为 null 时写根对象。 */
+    fun obj(key: String? = null, block: JsonBuilder.() -> Unit) {
+        pre(key)
+        sb.append('{')
+        indent++
+        hasMember = false
+        freshOpen = pretty
+        block()
+        val nested = hasMember
+        indent--
+        if (nested) {
+            sb.append(nl).append(pad)
+        }
+        sb.append('}')
+        hasMember = true
+        freshOpen = false
+    }
+
+    fun int(key: String, value: Int) {
+        pre(key)
+        sb.append(value)
+    }
+
+    fun bool(key: String, value: Boolean) {
+        pre(key)
+        sb.append(if (value) "true" else "false")
+    }
+
+    private fun pre(key: String?) {
+        when {
+            hasMember -> sb.append(',').append(nl)
+            freshOpen -> sb.append(nl)
+        }
+        freshOpen = false
+        hasMember = true
+        sb.append(pad)
+        if (key != null) {
+            sb.append('"').append(key).append('"').append(if (pretty) ": " else ":")
+        }
+    }
+
+    private val nl: String get() = if (pretty) "\n" else ""
+
+    private val pad: String get() = if (pretty) "  ".repeat(indent) else ""
 }

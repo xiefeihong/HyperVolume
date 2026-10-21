@@ -80,7 +80,7 @@ object Shell {
     /**
      * 用单引号安全包裹字符串供 root shell 使用。POSIX 单引号内除单引号外一切原样保留，
      * 故把值里的单引号闭开为 `'\''`（结束引号 + 转义单引号 + 重开引号）。
-     * 当前配置 XML 只含双引号不会产生单引号，本包裹为防御性加固，避免未来格式变化引入命令注入。
+     * 当前配置 JSON 只含双引号不会产生单引号，本包裹为防御性加固，避免未来格式变化引入命令注入。
      */
     internal fun quote(s: String?): String =
         if (s == null) "''" else "'" + s.replace("'", "'\\''") + "'"
@@ -111,7 +111,7 @@ object Shell {
      * 开机最早阶段（system_server 启动前）以 resetprop 直接设置 ro.config.media_vol_steps，
      * AudioService 初始化时读到的就是用户档位数。
      *
-     * 生效标志与档位数以字面量烘进脚本（配置已改为 XML，shell 无法用 cut 解析）；写入后立即
+     * 生效标志与档位数以字面量烘进脚本（配置已改为 JSON，shell 无法用 cut 解析）；写入后立即
      * 对齐当前属性值——本周期内任何原因的 system_server 重启都会读到正确档位。停用或镜像异常时
      * 删除属性恢复 ROM 默认。resetprop 对 ro. 属性的修改只能通过 Magisk / KernelSU 的
      * resetprop 工具（setprop 不允许改 ro.），两者都不可用时静默失败，不影响其他保险。

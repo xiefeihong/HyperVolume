@@ -15,10 +15,10 @@ import kotlin.math.roundToInt
 /**
  * 应用侧配置仓（移植自旧 `MainActivity`/`ConfigEditor` 的 SharedPreferences 读写职责）。
  *
- * 界面上的所有编辑先落到内存 [VolumeConfig]，整体以 `toXml()` 暂存于**单一**偏好键
- * [Prefs.KEY_CONFIG_XML]；只有「保存修改」才会推送到系统（见 [SaveEngine]）。因此这里
- * 只是「编辑暂存区」，不代表系统生效值——生效基线由 [VolumeConfig.toXml] 与
- * 上次成功写入的 XML 比对得出（见 [EditorState.hasUnsavedChanges]）。
+ * 界面上的所有编辑先落到内存 [VolumeConfig]，整体以 `toJson()` 暂存于**单一**偏好键
+ * [Prefs.KEY_CONFIG_JSON]；只有「保存修改」才会推送到系统（见 [SaveEngine]）。因此这里
+ * 只是「编辑暂存区」，不代表系统生效值——生效基线由 [VolumeConfig.toJson] 与
+ * 上次成功写入的 JSON 比对得出（见 [EditorState.hasUnsavedChanges]）。
  *
  * 另持有两个环境事实键：
  *  - [Prefs.KEY_SYSTEM_DEFAULT_STEPS]：首次探测到的**未被模块改写**的系统原生媒体档位数；
@@ -32,17 +32,17 @@ class ConfigStore(context: Context) {
     // ==================== 编辑暂存 ====================
 
     /** 暂存的整份配置；缺失/非法返回 `null`（由调用方回落 [defaultConfig]）。 */
-    fun loadModel(): VolumeConfig? = VolumeConfig.fromXml(rawXml())
+    fun loadModel(): VolumeConfig? = VolumeConfig.fromJson(rawJson())
 
-    /** 暂存配置的原始 XML（缺失返回空串）。 */
-    fun rawXml(): String = prefs.getString(Prefs.KEY_CONFIG_XML, "").orEmpty()
+    /** 暂存配置的原始 JSON（缺失返回空串）。 */
+    fun rawJson(): String = prefs.getString(Prefs.KEY_CONFIG_JSON, "").orEmpty()
 
     /** 是否已存过配置（App 数据被清空后为 false，此时需按系统侧配置恢复界面）。 */
-    fun hasStoredConfig(): Boolean = prefs.contains(Prefs.KEY_CONFIG_XML)
+    fun hasStoredConfig(): Boolean = prefs.contains(Prefs.KEY_CONFIG_JSON)
 
     /** 异步落盘（内存即时可见，Hook 端读的是 Settings.Global/镜像，不依赖此处的同步写）。 */
     fun persist(model: VolumeConfig) {
-        prefs.edit().putString(Prefs.KEY_CONFIG_XML, model.toXml()).apply()
+        prefs.edit().putString(Prefs.KEY_CONFIG_JSON, model.toJson()).apply()
     }
 
     /**
@@ -50,7 +50,7 @@ class ConfigStore(context: Context) {
      * 语义与旧实现的 `commit()` 一致。
      */
     fun persistBlocking(model: VolumeConfig) {
-        prefs.edit().putString(Prefs.KEY_CONFIG_XML, model.toXml()).commit()
+        prefs.edit().putString(Prefs.KEY_CONFIG_JSON, model.toJson()).commit()
     }
 
     // ==================== 系统默认档位数 ====================

@@ -39,9 +39,9 @@
    - 改了**档位数** → 需「重启系统框架」（屏幕短暂黑屏属正常现象）；
    - 改了**模式 / 音量范围** → 通常「重启蓝牙」即可；
    - 音量键步进即时生效。
-5. 想回到原生行为：选 **默认** 模式，或点 **恢复系统默认（关闭模块）**。
+5. 想回到原生行为：选 **默认** 模式，或到 **设置 → 故障排除 → 恢复系统默认（关闭模块）**（完成后会询问是否一并清除本应用写入的数据）。
 
-排查手段：首页「运行状态」六行检测（模块是否加载、档位数是否生效、当前输出设备等）；顶栏「查看模块日志」读取模块自写日志（支持复制/清理）。
+排查手段：首页「运行状态」六行检测（模块是否加载、档位数是否生效、当前输出设备等）；**设置 → 故障排除 → 查看模块日志** 读取模块自写日志（支持复制/清理），同页还有「调试信息」与「重新检测运行状态」。
 
 ## 三种模式对比
 
@@ -66,7 +66,7 @@
 | libxposed api | 102.0.0 | `compileOnly`，运行期由 LSPosed 注入 |
 | compileSdk / targetSdk / minSdk | 37 / 35 / 29 | |
 
-版本号单一来源：`gradle.properties` 的 `appVersionName` / `appVersionCode`。
+版本号单一来源：`gradle.properties` 的 `appVersionName` / `appVersionCode`。递增约定：功能代码改动超过 10 行即次版本号 +1（`1.0.0 → 1.1.0`，修订号归零），只修 bug 的小改动进修订号，`versionCode` 每次都 +1。
 
 ## 架构
 
@@ -75,7 +75,7 @@ app/src/main/java/com/xiefeihong/hypervolume/
 ├── HookEntry.kt                 # @YukiHookLibXposedEntry 模块入口（configure + registerFrameworkEvents + encase）
 ├── core/                        # 纯逻辑层：被 App 进程与 Hook 端（system_server / 蓝牙进程）共用，禁止引用任何 Xposed API
 │   ├── Prefs.kt                 #   配置常量 + 档位/键步网格吸附算法（clampMediaSteps/keyDelta/nextKeyStepUp…）
-│   ├── VolumeConfig.kt          #   不可变配置值对象 + 自描述 XML 序列化/解析（含 XXE 加固）
+│   ├── VolumeConfig.kt          #   不可变配置值对象 + 自描述 JSON 序列化/解析（手写紧凑串 + 容忍手工编辑）
 │   ├── DeviceConfig.kt / Range.kt / VolumeMode.kt / OutputDevice.kt  # 单设备配置、范围、模式「枚举即策略」
 │   ├── Avrcp.kt                 #   AVRCP 绝对音量映射计算 + 预览/映射表文本生成
 │   ├── NativeVolumeCurve.kt     #   ROM 真实音量曲线读取（引擎表/策略表/AOSP 回退、dB 归一）
@@ -86,7 +86,8 @@ app/src/main/java/com/xiefeihong/hypervolume/
 │   ├── AudioHooks.kt            #   system_server 侧：档位五重保险 + 音量键接管 + 模式B 软件衰减 + 自愈校正
 │   └── BtHooks.kt               #   com.android.bluetooth 侧：AVRCP 绝对音量曲线替换 + 上报拦截
 ├── app/                         # 应用侧业务逻辑（与界面解耦，可在 JVM 单测直接断言）
-│   ├── ConfigStore.kt           #   SharedPreferences 持久化（整份配置存单键 config_xml）
+│   ├── ConfigStore.kt           #   SharedPreferences 持久化（整份配置存单键 config_json）
+│   ├── BackupEngine.kt          #   备份与恢复：JSON 存档编解码（配置值写成嵌套对象）+ 偏好写回
 │   ├── StatusProbe.kt           #   运行状态检测：逐行状态文本生成
 │   ├── EditorState.kt           #   编辑态快照（模型 / 暂存 / 基线 / 弹框状态）
 │   ├── PreviewBuilder.kt        #   曲线预览点列 + 等宽映射表文本
@@ -118,33 +119,63 @@ app/src/main/java/com/xiefeihong/hypervolume/
 
 ## 配置格式与生效链路
 
-配置以**自描述 XML**（不兼容任何历史的位置式 `;` 串格式）在三个通道间传递：
+配置以**自描述 JSON**（不兼容任何历史的位置式 `;` 串与早前的 XML 格式）在三个通道间传递：
 
-```xml
-<config enabled="1" mediaSteps="50" keySteps="15">
-  <device name="speaker" mode="2">
-    <b min="2" max="48" curve="0"/>
-    <d min="0" max="100" curve="0"/>
-  </device>
-  <device name="wired" mode="2"> ... </device>
-  <device name="bt" mode="1">
-    <a min="0" max="127" curve="2"/>
-    <b min="2" max="100" curve="0"/>
-    <d min="0" max="100" curve="0"/>
-  </device>
-</config>
+```json
+{
+  "enabled": true,
+  "mediaSteps": 50,
+  "keySteps": 15,
+  "devices": {
+    "speaker": { "mode": 2, "b": { "min": 2, "max": 48, "curve": 0 }, "d": { "min": 0, "max": 100, "curve": 0 } },
+    "wired":   { "mode": 2, "b": { "min": 1, "max": 40, "curve": 1 }, "d": { "min": 0, "max": 100, "curve": 0 } },
+    "bt":      { "mode": 1, "a": { "min": 0, "max": 127, "curve": 2 }, "b": { "min": 2, "max": 100, "curve": 0 }, "d": { "min": 0, "max": 100, "curve": 0 } }
+  }
+}
 ```
+
+两种形态由同一个手写写出器产出（`org.json` 在 JVM 上按 `HashMap` 迭代、键序不稳定，故不用它写出）：
+
+- **紧凑单行**：存 `SharedPreferences`，并充当「两次序列化可比对」的差异基线——键序固定才能判断有无未保存修改；
+- **缩进两空格**：写 `Settings.Global` 与镜像文件，便于 `cat` / `settings get` 直接阅读。两者解析等价。
+
+解析面尽量容忍手改：布尔接受 `true/false` 与 `1/0`（含字符串写法）、数字接受 `"50"`、未知键忽略、字段缺失或越界则回落默认并钳制到合法区间；顶层四个键一个都没有（不是本模块的配置）则整份拒绝。全程只用双引号、不含单引号，因此嵌入 `settings put global '<v>'`（POSIX 单引号包裹）仍然安全，格式化串的换行也在单引号内原样保留。
 
 | 通道 | 位置 | 用途 |
 |---|---|---|
-| App 暂存 | `SharedPreferences("settings")` 单键 `config_xml` | 编辑态持久化；另存 `system_default_steps` / 环境事实 |
-| 主通道 | `Settings.Global["volume_steps_hook_config"]`（格式化 XML） | Hook 端实时读取，`registerContentObserver` 监听变更即时失效缓存 |
+| App 暂存 | `SharedPreferences("settings")` 单键 `config_json`（紧凑） | 编辑态持久化；另存 `system_default_steps` / 环境事实 |
+| 主通道 | `Settings.Global["volume_steps_hook_config"]`（格式化 JSON） | Hook 端实时读取，`registerContentObserver` 监听变更即时失效缓存 |
 | 镜像兜底 | `/data/system/hypervolume_config` | 冷启动早期 SettingsProvider 未就绪时直读 |
 | 开机脚本 | `/data/adb/post-fs-data.d/hypervolume.sh` | Magisk / KernelSU 最早阶段 `setprop ro.config.media_vol_steps` |
 | 开发者选项 | `Settings.Global["bluetooth_disable_absolute_volume"]` | 模式B 时置 `1` |
 | 模块日志 | `/data/system/hypervolume_sys.log`、`/data/data/com.android.bluetooth/files/hypervolume_bt.log` | App 内「查看模块日志」读取 |
 
-`mode`：`0=默认（直通）` / `1=绝对音量`（仅蓝牙，其他设备归一为 2） / `2=相对音量`；`curve`：`0=对数` / `1=线性` / `2=平方根`。
+> **从 v1.0.0（XML 时代）升级**：不再读旧格式（`config_xml` 偏好与系统侧 XML 均已删除）。旧 XML 解析不出时 Hook 端视为无配置、回到系统默认行为（不会崩溃），打开 App 重新点一次「保存修改」即恢复。
+
+`mode`：`0=默认（直通）` / `1=绝对音量`（仅蓝牙，其他设备归一为 2） / `2=相对音量`；`curve`：`0=对数` / `1=线性` / `2=平方根`；`a/b/d` 分别为绝对音量 / 相对音量 / 默认三套范围（`a` 仅蓝牙写）。
+
+模块元数据（`META-INF/xposed/java_init.list`、`module.prop`、`scope.list`）由 `yukihook-compiler` 依据 `HookEntry` 上的注解在编译期生成，源码目录中不手动声明。
+
+## 备份与恢复
+
+**设置 → 备份与恢复** 经 SAF 导出/导入 `.json` 存档（格式版本 `2`）：
+
+```json
+{
+  "format": "HyperVolume-backup",
+  "version": 2,
+  "createdAt": "2026-10-22T03:00:00",
+  "package": "com.xiefeihong.hypervolume",
+  "prefs": [
+    { "k": "config_json", "t": "s", "v": { "enabled": true, "mediaSteps": 50, "keySteps": 15, "devices": { "…": {} } } },
+    { "k": "system_default_steps", "t": "i", "v": 15 },
+    { "k": "ui_language", "t": "s", "v": "zh" }
+  ],
+  "global": { "enabled": true, "mediaSteps": 50, "…": "写入系统的生效配置" }
+}
+```
+
+配置类值（`prefs` 里的 `config_json` 与顶层 `global`）**写成嵌套对象**而非转义字符串，便于直接阅读与改档位；导入时自动序列化回紧凑串写回偏好。单字符类型标记 `t`（`s/i/l/f/b/u`）保住 `SharedPreferences` 的强类型。v1 存档（配置为转义字符串）仍可导入；解析不出对象的（空串 / 畸形）原样保留字符串，不静默丢数据。
 
 模块元数据（`META-INF/xposed/java_init.list`、`module.prop`、`scope.list`）由 `yukihook-compiler` 依据 `HookEntry` 上的注解在编译期生成，源码目录中不手动声明。
 
@@ -168,37 +199,52 @@ app/src/main/java/com/xiefeihong/hypervolume/
 
 ```
 build/apk/HyperVolume-v<appVersionName>-debug.apk
-build/apk/HyperVolume-v<appVersionName>-release-unsigned.apk
+build/apk/HyperVolume-v<appVersionName>-release.apk          # 已签名（存在 keystore.properties）
+build/apk/HyperVolume-v<appVersionName>-release-unsigned.apk  # 未签名（缺 keystore.properties）
 ```
 
 > 产物输出目录必须是独立子目录：若直接复制到工程根目录，Gradle 会把根目录推断为 copyApk 输出，而根目录同时是 `app/src` 全部编译输入的祖先目录，`compileReleaseKotlin` 会因「uses this output of task without declaring an implicit dependency」直接失败。
 
-**发布签名**：根目录放置 `keystore.properties`（该文件含口令，已在 `.gitignore` 中，不入库）即自动启用 release 签名：
+**发布签名**：根目录放置 `keystore.properties`（含口令，与 `*.jks` / `*.keystore` 一同已在 `.gitignore` 中，不入库）即自动启用 release 签名：
 
 ```properties
 storeFile=../release.keystore
 storePassword=****
-keyAlias=****
+keyAlias=hypervolume
 keyPassword=****
+```
+
+`storeFile` 相对于 `app/` 模块目录，`../release.keystore` 即仓库根目录。密钥库自行生成：
+
+```bash
+keytool -genkeypair -v -keystore release.keystore -storetype PKCS12 \
+  -alias hypervolume -keyalg RSA -keysize 2048 -sigalg SHA256withRSA -validity 10950 \
+  -storepass '<口令>' -keypass '<口令>' -dname 'CN=HyperVolume, O=<你的名>'
 ```
 
 缺失该文件时 release 退化为**未签名包**，以便 CI / 他机构建不失败。
 
+> ⚠️ **务必备份 `release.keystore` 与口令**：Xposed 模块以 APK 形式安装，一旦密钥丢失就无法用新包覆盖升级（只能卸载重装、丢失应用内暂存配置），发布到 GitHub Release 后也无法撤回。同一个仓库内不要混用 debug 密钥。
+
 ## 测试
 
-JVM 单元测试覆盖与界面无关的核心算法，共 **7 个测试类 / 57 个用例**（`failures=0 errors=0`）：
+JVM 单元测试覆盖与界面无关的核心算法，共 **11 个测试类 / 92 个用例**（`failures=0 errors=0`）：
 
 | 测试类 | 覆盖内容 |
 |---|---|
 | `PrefsTest` | 档位/键步 clamp、`keyDelta`、网格吸附 `nextKeyStepUp/Down` 的严格单调性与边界 |
-| `VolumeConfigTest` | XML 往返序列化、非法/缺失字段回落、XXE 与畸形输入加固 |
+| `VolumeConfigTest` | JSON 往返序列化、紧凑串键序锁定、格式化串等价、非法/缺失字段回落、手工编辑（`1/0`、字符串数字）容忍 |
 | `AvrcpTest` | AVRCP 0~127 映射、曲线标签、预览与映射表文本生成 |
 | `EditorStateTest` | 编辑态派生（目标物理档位、未保存判定） |
 | `PreviewBuilderTest` | 曲线点列与映射表构建 |
 | `SavePlanTest` | 保存计划：门控三选项、改动清单、重启判定（系统框架 / 蓝牙） |
 | `StatusLinesTest` | 运行状态各行文本生成 |
+| `BackupFormatTest` | 备份存档往返与类型还原、配置值导出为嵌套对象 / 导入回串、v1 存档兼容、非法存档拒绝 |
+| `DebugInfoLinesTest` | 调试信息各段文本生成 |
+| `UpdateCheckerTest` | 版本比较与更新渠道解析 |
+| `StringResourcesTest` | 中英双语资源键集对齐、插参一致性、`\n` 必须为转义而非物理换行 |
 
-界面与应用侧逻辑已在模拟器（Pixel 3a / API 34）实机验收：状态检测区、开关与禁用态滑条、设备选项卡切换改变「绝对音量」可用性、模式芯片禁用置灰、等宽预览摘要与映射表、曲线图双口径切换与轴标签刷新、日志/提示/保存确认弹框、保存失败 Toast、未保存提示行、使用说明。
+界面与应用侧逻辑已在模拟器（Pixel 3a / API 34）实机验收：状态检测区、开关与禁用态滑条、设备选项卡切换改变「绝对音量」可用性、模式芯片禁用置灰、等宽预览摘要与映射表、曲线图双口径切换与轴标签刷新、日志/提示/保存确认弹框、保存失败 Toast、未保存提示行、使用说明；设置页三区块同页堆叠（无顶部标签）、「恢复系统默认」位于「故障排除」首行、映射曲线选项无「，默认」字样（中英双语）；应用暂存以紧凑 JSON 写入 `config_json`，导出存档里配置值为嵌套对象，导入该存档后暂存恢复为等价紧凑 JSON（`mediaSteps` / `keySteps` 实测跟随）。
 
 > **Hook 运行时行为尚未在真机验证**：模拟器无 HyperOS 环境、无真实音频与蓝牙硬件。`AudioHooks` / `BtHooks` 的实际效果与 root 保存/重启流程需在真机启用模块后确认。
 
@@ -210,7 +256,7 @@ JVM 单元测试覆盖与界面无关的核心算法，共 **7 个测试类 / 57
 | 界面 | AppCompat + Material3 + ViewBinding | Miuix 0.9.4 + Compose 1.12（HyperCeiler 风格卡片流） |
 | 模块入口 | 手写 `XposedModule` + `META-INF/xposed/*` 资源 | `@YukiHookLibXposedEntry` 注解 + KSP 编译期生成 |
 | 反射 | 手写 `Class.getMethod` + 缓存 | YukiHookAPI `HookChain` + KavaRef（保留方法/字段缓存与逐级回退） |
-| 配置格式 | 10 字段位置式 `;` 串 | 自描述 XML（按设备分组，字段可缺失回落默认） |
+| 配置格式 | 10 字段位置式 `;` 串 | 自描述 JSON（按设备分组，字段可缺失回落默认，紧凑/格式化双形态） |
 | 保存流程 | `AlertDialog` + `Toast` + `Handler` 手工线程 | `SaveEngine` 先算 `SavePlan` 再执行 `suspend` root 动作，逻辑可单测 |
 | 档位上限 | 127 | 100 |
 
@@ -220,7 +266,7 @@ JVM 单元测试覆盖与界面无关的核心算法，共 **7 个测试类 / 57
 
 - **改完没生效？** 档位数变化必须「重启系统框架」；只调范围/模式一般「重启蓝牙」即可。App 会在保存后按需提示。
 - **一定要 Root 吗？** 是的，需要 Root + LSPosed；未 Root 无法下发配置与开机脚本。
-- **会不会影响其他音频？** 只作用于媒体音量；随时可用「恢复系统默认」还原，或在 LSPosed 中停用模块后重启手机。
+- **会不会影响其他音频？** 只作用于媒体音量；随时可用「设置 → 故障排除 → 恢复系统默认」还原，或在 LSPosed 中停用模块后重启手机。
 - **其他机型表现不同？** 档位数与原声曲线因厂商音频配置而异，App 会自动读取本机实际配置；读不到任何 ROM 文件时曲线查看器回退 AOSP 参考曲线。
 
 ## 许可

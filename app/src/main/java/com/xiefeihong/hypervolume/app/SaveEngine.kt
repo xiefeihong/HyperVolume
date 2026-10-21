@@ -45,7 +45,7 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
      */
     fun planSave(state: EditorState, forceDefault: Boolean): SavePlan {
         val pending = if (forceDefault) store.defaultConfig(state.systemDefaultSteps) else state.model
-        val base = VolumeConfig.fromXml(state.lastSavedXml)
+        val base = VolumeConfig.fromJson(state.lastSavedJson)
         val blocked = !forceDefault && !pending.enabled && pending.anyDeviceNonDefault() &&
             store.capturedSystemDefaultSteps() == null && !store.systemDefaultAcknowledged
         return if (blocked) {
@@ -91,14 +91,14 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
             if (blocked.trustedRealSteps) store.captureSystemDefaultSteps(blocked.steps)
             store.systemDefaultAcknowledged = true
         }
-        return confirmPlan(state, pending, VolumeConfig.fromXml(state.lastSavedXml), fromReset = false)
+        return confirmPlan(state, pending, VolumeConfig.fromJson(state.lastSavedJson), fromReset = false)
     }
 
     /** 常规确认计划（旧 `proceedSave`）：与已生效基线比对列出改动，并算出需重启哪些组件。 */
     private fun confirmPlan(
         state: EditorState, pending: VolumeConfig, base: VolumeConfig?, fromReset: Boolean,
     ): SavePlan {
-        if (base != null && base.toXml() == pending.toXml()) {
+        if (base != null && base.toJson() == pending.toJson()) {
             return SavePlan.Nothing(Messages.saveNone)
         }
         val changes = describeChanges(base, pending)
@@ -136,27 +136,27 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
 
     /**
      * 把配置写入系统（Settings.Global 供 Hook 端实时读取）+ 镜像文件 + boot 脚本 +
-     * 「停用绝对音量」开发者选项，并回读解析后与紧凑 XML 比对验证（与排版无关）。
+     * 「停用绝对音量」开发者选项，并回读解析后与紧凑 JSON 比对验证（与排版无关）。
      *
      * 全程为 root 阻塞调用，切到 [Dispatchers.IO] 执行。
      */
     suspend fun pushConfig(model: VolumeConfig): PushResult = withContext(Dispatchers.IO) {
         store.persist(model)
-        val configXml = model.toXml()          // 紧凑：暂存与差异比对基线
-        val pushXml = model.toPrettyXml()      // 格式化：写入 Settings.Global 与镜像，便于查看
+        val configJson = model.toJson()          // 紧凑：暂存与差异比对基线
+        val pushJson = model.toPrettyJson()      // 格式化：写入 Settings.Global 与镜像，便于查看
         val softwareMode = model.modeFor(OutputDevice.BT) == Prefs.BT_MODE_SOFTWARE
         val active = model.remapActive
-        val putResult = Shell.putGlobalConfig(Prefs.GLOBAL_KEY, pushXml)
-        Shell.writeGlobalMirror(pushXml)
+        val putResult = Shell.putGlobalConfig(Prefs.GLOBAL_KEY, pushJson)
+        Shell.writeGlobalMirror(pushJson)
         Shell.writeBootScript(active, model.mediaSteps)
         Shell.putGlobalConfig(Shell.SETTING_AV_DISABLE, if (active && softwareMode) "1" else "0")
         var verified = false
         if (putResult.isSuccess) {
-            val readBack = VolumeConfig.fromXml(Shell.getGlobalConfig(Prefs.GLOBAL_KEY).output)
-            verified = readBack != null && readBack.toXml() == configXml
+            val readBack = VolumeConfig.fromJson(Shell.getGlobalConfig(Prefs.GLOBAL_KEY).output)
+            verified = readBack != null && readBack.toJson() == configJson
         }
         Shell.appendSysLog("push config saved=$verified")
-        PushResult(verified = verified, configXml = configXml)
+        PushResult(verified = verified, configJson = configJson)
     }
 
     /**
@@ -166,25 +166,25 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
     suspend fun commit(plan: SavePlan.Confirm): CommitResult {
         val push = pushConfig(plan.pending)
         if (!push.verified) {
-            return CommitResult(savedXml = null, followUp = FollowUp.Failed(Messages.pushFail))
+            return CommitResult(savedJson = null, followUp = FollowUp.Failed(Messages.pushFail))
         }
         val followUp = when {
             plan.thenClearData -> FollowUp.AskClearData(plan.restartBt, plan.restartSystem)
             plan.restartBt || plan.restartSystem -> FollowUp.AskRestart(plan.restartBt, plan.restartSystem)
             else -> FollowUp.Done
         }
-        return CommitResult(savedXml = push.configXml, followUp = followUp)
+        return CommitResult(savedJson = push.configJson, followUp = followUp)
     }
 
     /**
      * 清除此应用写入的系统侧数据：配置（Settings.Global 键 / 镜像 / boot 脚本 / 被改写的
-     * ro 属性）与模块日志。返回新的「已生效基线」XML（= 当前模型，此后不再提示未保存修改）。
+     * ro 属性）与模块日志。返回新的「已生效基线」JSON（= 当前模型，此后不再提示未保存修改）。
      *
      * 刻意**保留**本地 SharedPreferences：其中的原生档位数等属设备环境事实，且清除后框架
      * 未重启时 `getStreamMaxVolume` 仍返回刚退下的旧覆盖值，一并抹掉会导致重启前把它重新误固化。
      */
     suspend fun clearAppData(model: VolumeConfig): String {
-        val baseline = model.toXml()
+        val baseline = model.toJson()
         withContext(Dispatchers.IO) {
             Shell.clearWrittenConfig()
             Shell.clearModuleLogs()
@@ -221,10 +221,10 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
     ): SaveAndRestart {
         val push = pushConfig(model)
         if (!push.verified) {
-            return SaveAndRestart(pushFailed = true, savedXml = "", bluetoothFailed = false)
+            return SaveAndRestart(pushFailed = true, savedJson = "", bluetoothFailed = false)
         }
         val outcome = restart(restartBt, restartSystem)
-        return SaveAndRestart(pushFailed = false, savedXml = push.configXml, bluetoothFailed = outcome.bluetoothFailed)
+        return SaveAndRestart(pushFailed = false, savedJson = push.configJson, bluetoothFailed = outcome.bluetoothFailed)
     }
 
     // ==================== 文案辅助 ====================
@@ -323,8 +323,8 @@ sealed interface SavePlan {
     ) : SavePlan
 }
 
-/** [SaveEngine.pushConfig] 的结果：[configXml] 无论成功与否都是本轮比对基线。 */
-data class PushResult(val verified: Boolean, val configXml: String)
+/** [SaveEngine.pushConfig] 的结果：[configJson] 无论成功与否都是本轮比对基线。 */
+data class PushResult(val verified: Boolean, val configJson: String)
 
 /** [SaveEngine.commit] 成功后界面该做的下一步。 */
 sealed interface FollowUp {
@@ -342,7 +342,7 @@ sealed interface FollowUp {
     data object Done : FollowUp
 }
 
-data class CommitResult(val savedXml: String?, val followUp: FollowUp)
+data class CommitResult(val savedJson: String?, val followUp: FollowUp)
 
 /** [SaveEngine.restart] 的结果。 */
 data class RestartOutcome(val bluetoothFailed: Boolean)
@@ -350,7 +350,7 @@ data class RestartOutcome(val bluetoothFailed: Boolean)
 /** 「保存并重启」组合动作的结果：推送失败时不执行重启。 */
 data class SaveAndRestart(
     val pushFailed: Boolean,
-    val savedXml: String,
+    val savedJson: String,
     val bluetoothFailed: Boolean,
 )
 

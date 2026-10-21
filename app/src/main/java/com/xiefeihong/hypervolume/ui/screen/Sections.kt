@@ -178,7 +178,7 @@ fun RangeSection(state: EditorState, preview: Preview, vm: HyperVolumeViewModel)
     }
 }
 
-/** 操作卡：未保存/未生效提示 + 保存、重启蓝牙、重启系统框架、恢复默认。 */
+/** 操作卡：未保存/未生效提示 + 保存、重启蓝牙、重启系统框架（「恢复系统默认」已迁至设置-故障排除）。 */
 @Composable
 fun ActionsSection(state: EditorState, snapshot: StatusSnapshot?, busy: Boolean, vm: HyperVolumeViewModel) {
     val pending = when {
@@ -202,11 +202,6 @@ fun ActionsSection(state: EditorState, snapshot: StatusSnapshot?, busy: Boolean,
         SecondaryButton(
             text = stringResource(R.string.btn_apply_restart),
             onClick = vm::onAskRestartSystem,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-        )
-        SecondaryButton(
-            text = stringResource(R.string.btn_reset),
-            onClick = vm::onResetToDefault,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         )
         HintText(stringResource(R.string.ops_hint))

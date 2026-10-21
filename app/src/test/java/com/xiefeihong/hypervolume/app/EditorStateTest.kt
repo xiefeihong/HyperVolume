@@ -44,7 +44,7 @@ class EditorStateTest {
         systemDefaultSteps: Int = 15,
     ): EditorState = EditorState(
         model = cfg,
-        lastSavedXml = cfg.toXml(),
+        lastSavedJson = cfg.toJson(),
         editingDevice = editingDevice,
         systemDefaultSteps = systemDefaultSteps,
     ).replaceModel(cfg)
@@ -187,7 +187,7 @@ class EditorStateTest {
         assertFalse(s.hasUnsavedChanges)
         val changed = s.changeMediaSteps(80)
         assertTrue(changed.hasUnsavedChanges)
-        assertFalse(changed.markSaved(changed.model.toXml()).hasUnsavedChanges)
+        assertFalse(changed.markSaved(changed.model.toJson()).hasUnsavedChanges)
     }
 
     @Test

@@ -24,12 +24,12 @@ object Prefs {
     const val MIRROR_CONFIG_FILE = "/data/system/hypervolume_config"
 
     /**
-     * App 侧唯一的配置持久化键：整份 [VolumeConfig] 以其 `toXml()` 存此一键，
-     * 读时 [VolumeConfig.fromXml]。取代此前散落的每模式标量键（对象图取代键位映射）。
+     * App 侧唯一的配置持久化键：整份 [VolumeConfig] 以其 `toJson()` 存此一键，
+     * 读时 [VolumeConfig.fromJson]。取代此前散落的每模式标量键（对象图取代键位映射）。
      */
-    const val KEY_CONFIG_XML = "config_xml"
+    const val KEY_CONFIG_JSON = "config_json"
 
-    /** 首次运行时捕获的系统原生媒体档位数（模块未覆盖时的 getStreamMaxVolume，属环境事实、不入配置 XML）。 */
+    /** 首次运行时捕获的系统原生媒体档位数（模块未覆盖时的 getStreamMaxVolume，属环境事实、不入配置文件）。 */
     const val KEY_SYSTEM_DEFAULT_STEPS = "system_default_steps"
 
     /**
@@ -47,9 +47,6 @@ object Prefs {
 
     /** 颜色（主题）模式偏好：0 跟随系统 / 1 浅色 / 2 深色。 */
     const val KEY_THEME_MODE = "ui_theme_mode"
-
-    /** 设置页当前标签位：0 通用 / 1 备份与恢复 / 2 故障排除（仅记忆界面位置）。 */
-    const val KEY_SETTINGS_TAB = "ui_settings_tab"
 
     /**
      * 蓝牙音量控制模式 A：保持绝对音量（默认）。
@@ -109,9 +106,6 @@ object Prefs {
 
     /** 媒体流索引（android.media.AudioSystem.STREAM_MUSIC 的稳定取值）。 */
     const val STREAM_MUSIC_INDEX = 3
-
-    /** 设置页标签位默认值（通用）。 */
-    const val SETTINGS_TAB_DEFAULT = 0
 
     /** App 侧 SharedPreferences 句柄。 */
     fun get(context: Context): SharedPreferences =

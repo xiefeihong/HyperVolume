@@ -1,12 +1,7 @@
 package com.xiefeihong.hypervolume.ui.screen
 
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import com.xiefeihong.hypervolume.R
@@ -18,14 +13,15 @@ import com.xiefeihong.hypervolume.ui.component.BodyText
 import com.xiefeihong.hypervolume.ui.component.HintText
 import com.xiefeihong.hypervolume.ui.component.SectionCard
 import com.xiefeihong.hypervolume.ui.component.SectionDivider
+import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.TabRow
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Backup
 import top.yukonga.miuix.kmp.icon.extended.Import
 import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.icon.extended.Report
+import top.yukonga.miuix.kmp.icon.extended.Reset
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.icon.extended.Theme
 import top.yukonga.miuix.kmp.icon.extended.Translate
@@ -33,32 +29,17 @@ import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.OverlaySpinnerPreference
 
 /**
- * 设置页：通用 / 备份与恢复 / 故障排除 三标签（参考 HyperCeiler 的设置页分区）。
+ * 设置页：通用 / 备份与恢复 / 故障排除 三区块同页堆叠，一滑到底。
  *
- * 标签位由 [UiState.settingsTab] 持有并落盘，重开 App 回到上次的标签。
+ * 原先的顶部标签选项卡已去掉（三块内容都不长，分标签反而要多一步切换），
+ * 区块标题由各自的 [SectionCard] 承担，层级与 HyperCeiler 的设置页一致。
  */
 @Composable
 fun SettingsScreen(state: UiState, vm: HyperVolumeViewModel) {
-    val tabs = listOf(
-        stringResource(R.string.tab_general),
-        stringResource(R.string.tab_backup),
-        stringResource(R.string.tab_troubleshoot),
-    )
     PageColumn {
-        TabRow(
-            tabs = tabs,
-            selectedTabIndex = state.settingsTab.coerceIn(0, tabs.lastIndex),
-            onTabSelected = vm::onSettingsTab,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
-            // 默认上限 98dp 会把英文标签截成 "Backup & r…"，放宽后三个标签均分整行
-            maxWidth = 200.dp,
-            itemSpacing = 6.dp,
-        )
-        when (state.settingsTab) {
-            TAB_BACKUP -> BackupSection(vm)
-            TAB_TROUBLESHOOT -> TroubleshootSection(vm)
-            else -> GeneralSection(state = state, vm = vm)
-        }
+        GeneralSection(state = state, vm = vm)
+        BackupSection(vm)
+        TroubleshootSection(state = state, vm = vm)
     }
 }
 
@@ -128,10 +109,21 @@ private fun BackupSection(vm: HyperVolumeViewModel) {
     }
 }
 
-/** 故障排除：调试信息 + 模块日志（均为全屏子页）+ 手动重新检测运行状态。 */
+/**
+ * 故障排除：恢复系统默认（自主页操作卡迁入，含其后的清除数据询问）+
+ * 调试信息 + 模块日志（均为全屏子页）+ 手动重新检测运行状态。
+ */
 @Composable
-private fun TroubleshootSection(vm: HyperVolumeViewModel) {
+private fun TroubleshootSection(state: UiState, vm: HyperVolumeViewModel) {
     SectionCard(title = stringResource(R.string.tab_troubleshoot)) {
+        BasicComponent(
+            title = stringResource(R.string.btn_reset),
+            summary = stringResource(R.string.reset_summary),
+            startAction = { Icon(imageVector = MiuixIcons.Reset, contentDescription = null) },
+            onClick = vm::onResetToDefault,
+            enabled = !state.busy,
+        )
+        SectionDivider()
         ArrowPreference(
             title = stringResource(R.string.debug_info),
             summary = stringResource(R.string.debug_info_summary),
@@ -155,6 +147,4 @@ private fun TroubleshootSection(vm: HyperVolumeViewModel) {
     }
 }
 
-private const val TAB_BACKUP = 1
-private const val TAB_TROUBLESHOOT = 2
 private const val MIME_JSON = "application/json"

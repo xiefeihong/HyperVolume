@@ -131,7 +131,7 @@ class StatusProbe(context: Context, private val store: ConfigStore) {
 
         // 应用数据被清除后首次打开：以系统配置键为准恢复界面，避免误覆盖已生效的配置。
         var adopted: VolumeConfig? = null
-        val globalConfig = if (root) VolumeConfig.fromXml(Shell.getGlobalConfig(Prefs.GLOBAL_KEY).output) else null
+        val globalConfig = if (root) VolumeConfig.fromJson(Shell.getGlobalConfig(Prefs.GLOBAL_KEY).output) else null
         if (root && !store.hasStoredConfig() && globalConfig != null) {
             store.persistBlocking(globalConfig)
             adopted = globalConfig
