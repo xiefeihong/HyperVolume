@@ -46,6 +46,7 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.ThemeController
@@ -56,6 +57,8 @@ import top.yukonga.miuix.kmp.theme.ThemeController
  * 主页（0）→ 设置（1）→ 关于（2）由 [HorizontalPager] 承载：**左划前进、右划返回**
  * （标准 pager 语义），子页顶栏出现返回箭头，系统返回键逐级退回上一页。
  * 日志 / 调试信息 / 开源许可 / 设备信息是 [AppRoute] 全屏子页，覆盖在 pager 之上。
+ *
+ * 顶栏动作只留主页右上角的「刷新检测」：日志入口已改到「设置 → 故障排除」的全屏子页。
  *
  * 预览（摘要 / 曲线图 / 映射表）只在主页内**算一次**：等宽表列数依赖实测可用宽度，
  * 故主页整列包在 [BoxWithConstraints] 中取宽度，再分发给档位卡与范围卡。
@@ -113,6 +116,7 @@ fun HyperVolumeApp(vm: HyperVolumeViewModel) {
                     ""
                 }
                 val showBack = !onMainPages || pagerState.currentPage > 0
+                val onHome = onMainPages && pagerState.currentPage == PAGE_HOME
                 TopAppBar(
                     title = appBarTitle,
                     subtitle = appBarSubtitle,
@@ -122,6 +126,17 @@ fun HyperVolumeApp(vm: HyperVolumeViewModel) {
                                 Icon(
                                     imageVector = MiuixIcons.Back,
                                     contentDescription = stringResource(R.string.nav_back),
+                                )
+                            }
+                        }
+                    },
+                    actions = {
+                        // 主页右上角：手动重新探测运行状态（与设置-故障排除里的「刷新检测」同一动作）。
+                        if (onHome) {
+                            IconButton(onClick = vm::refreshStatus) {
+                                Icon(
+                                    imageVector = MiuixIcons.Refresh,
+                                    contentDescription = stringResource(R.string.btn_refresh),
                                 )
                             }
                         }

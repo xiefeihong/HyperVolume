@@ -104,6 +104,12 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
 
     fun onToggleEnabled(value: Boolean) = edit { it.toggleEnabled(value) }
 
+    /**
+     * 设置-通用「启用模块」总闸：只改模型（同主页开关一样需「保存修改」才下发）。
+     * 关闭后 Hook 端全部点位直接放行，已编辑的参数一律保留。
+     */
+    fun onToggleModule(value: Boolean) = edit { it.copy(model = it.model.withModuleEnabled(value)) }
+
     fun onMediaSteps(value: Int) = edit { it.changeMediaSteps(value) }
 
     fun onKeySteps(value: Int) = edit { it.changeKeySteps(value) }
@@ -154,7 +160,8 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
                 val e = _state.value.editor
                 probe.probe(
                     StatusInput(
-                        enabled = e.enabled,
+                        // 生效口径取模块总闸与档位修改开关的合取：任一个关闭都不应把用户档位数当目标值。
+                        enabled = e.enabled && e.model.moduleEnabled,
                         mediaSteps = e.mediaSteps,
                         keySteps = e.keySteps,
                         bluetoothMode = e.model.modeFor(e.editingDevice),
@@ -180,10 +187,13 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
     // ==================== 保存 / 重启 ====================
 
     /** 点「保存修改」。 */
-    fun onSave() = presentPlan(engine.planSave(_state.value.editor, forceDefault = false))
+    fun onSave() = presentPlan(engine.planSave(_state.value.editor))
 
-    /** 点「恢复系统默认（关闭模块）」：等价强制默认配置的保存流程。 */
-    fun onResetToDefault() = presentPlan(engine.planSave(_state.value.editor, forceDefault = true))
+    /**
+     * 「设置 → 备份与恢复 → 清除数据」入口：弹确认框，确认后才执行清除。
+     * 清除后系统侧仍持着刚退下的旧档位数，因此成功后沿用重启询问（蓝牙 + 系统框架）。
+     */
+    fun onAskClearData() = setDialog(DialogSpec.ClearData(restartBt = true, restartSystem = true))
 
     /** 门控警告里选定处理方式。 */
     fun onBlockedChoice(choice: BlockedChoice) {
@@ -210,11 +220,6 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
                     refreshStatus()
                     setDialog(DialogSpec.Restart(follow.restartBt, follow.restartSystem))
                 }
-
-                is FollowUp.AskClearData -> {
-                    refreshStatus()
-                    setDialog(DialogSpec.ClearData(follow.restartBt, follow.restartSystem))
-                }
             }
         }
     }
@@ -231,7 +236,7 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    /** 「恢复默认」后确认清除应用写入的系统侧数据。 */
+    /** 「设置 → 备份与恢复 → 清除数据」确认后执行清除应用写入的系统侧数据。 */
     fun onClearData() {
         val spec = _state.value.dialog as? DialogSpec.ClearData ?: return
         setDialog(DialogSpec.None)
@@ -590,7 +595,7 @@ sealed interface DialogSpec {
     /** 保存成功后的重启询问。 */
     data class Restart(val restartBt: Boolean, val restartSystem: Boolean) : DialogSpec
 
-    /** 「恢复系统默认」后的清除数据询问。 */
+    /** 清除数据确认框：确定后清除本应用写入的系统配置与日志。 */
     data class ClearData(val restartBt: Boolean, val restartSystem: Boolean) : DialogSpec
 
     /** 手动重启系统框架的确认框。 */

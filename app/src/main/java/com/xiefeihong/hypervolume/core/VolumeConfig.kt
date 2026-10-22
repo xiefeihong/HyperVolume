@@ -10,8 +10,7 @@ import org.json.JSONObject
  * 加全局的启用开关、档位数、音量键步进。整体以**自描述 JSON** 序列化，供 App 单键持久化
  * 与跨进程（Settings.Global / 镜像文件 / boot 脚本）传递。
  *
- * **不兼容任何历史格式**：位置式 `;` 串与早前的 XML 均已删除，全链路只认 JSON。
- * [fromJson] 解析失败或字段缺失一律回落到默认值。
+ * **只认 JSON**：不提供任何历史格式的解析分支，[fromJson] 解析失败或字段缺失一律回落到默认值。
  *
  * 写出用 [JsonBuilder]（手写、键序固定、零依赖，紧凑串可直接用作差异比对基线），
  * 读入用框架自带的 [JSONObject]（system_server / 蓝牙进程均可用，无需引入第三方 JSON）。
@@ -32,6 +31,13 @@ class VolumeConfig(
     val wired: DeviceConfig,
     /** 蓝牙配置。 */
     val bluetooth: DeviceConfig,
+    /**
+     * 模块级总闸（设置 → 通用「启用模块」）：`false` 时本模块完全不介入系统音量——
+     * 不重写档位数、不接管音量键、不改 AVRCP 曲线、不做软件衰减，行为与未安装模块一致。
+     * 与 [enabled] 分工不同：[enabled] 是主页的「启用档位修改」，关闭后仍可保留已编辑的
+     * 参数；本闸关闭时全部 Hook 点位直接放行。历史配置缺此字段按 `true`（视为启用）解析。
+     */
+    val moduleEnabled: Boolean = true,
 ) {
 
     val mediaSteps: Int = Prefs.clampMediaSteps(mediaSteps)
@@ -54,7 +60,7 @@ class VolumeConfig(
      * 默认范围（[DeviceConfig.defaultRange]）被收窄（非满量程）时返回该范围，满量程/关闭=直通返回 `null`。
      */
     fun activeRangeFor(d: OutputDevice): Range? {
-        if (!enabled) {
+        if (!engaged) {
             return null
         }
         val c = deviceFor(d)
@@ -73,20 +79,26 @@ class VolumeConfig(
 
     /**
      * Hook 端是否应改写系统全局媒体档位数（[mediaSteps] 是否落地）：
-     * 「启用档位修改」即 [enabled] 为真时应用用户档位数，关闭时保持系统默认（系统直通）。
+     * 模块总闸 [moduleEnabled] 与「启用档位修改」[enabled] 同时为真时应用用户档位数，
+     * 否则保持系统默认（系统直通）。
      *
      * 本判据只决定**全局档位数**是否改写；单个设备是否做音量重映射另由
      * [activeRangeFor] 决定（默认满量程返回 `null` → 该设备直通），二者解耦。
      */
-    val remapActive: Boolean get() = enabled
+    val remapActive: Boolean get() = engaged
+
+    /**
+     * 模块是否实际介入（Hook 各点位与 App 侧生效判定的唯一总闸）：总闸与档位修改开关都开。
+     */
+    val engaged: Boolean get() = moduleEnabled && enabled
 
     /** 蓝牙是否处于「相对音量（模式B）」：需抑制 AVRCP 绝对音量、走系统软件衰减。 */
     fun suppressBtAbsoluteVolume(): Boolean =
-        enabled && bluetooth.mode == Prefs.BT_MODE_SOFTWARE
+        engaged && bluetooth.mode == Prefs.BT_MODE_SOFTWARE
 
     /** 蓝牙是否处于「绝对音量（模式A）」：由蓝牙进程经 AVRCP 映射，返回 [VolumeMode.ABSOLUTE]；否则 `null`。 */
     fun bluetoothAvrcpMode(): VolumeMode? =
-        if (enabled && bluetooth.mode == Prefs.BT_MODE_ABSOLUTE) VolumeMode.ABSOLUTE else null
+        if (engaged && bluetooth.mode == Prefs.BT_MODE_ABSOLUTE) VolumeMode.ABSOLUTE else null
 
     /** 三设备中是否存在任一非默认（选了绝对/相对）模式。 */
     fun anyDeviceNonDefault(): Boolean =
@@ -98,21 +110,26 @@ class VolumeConfig(
         speaker.withMode(Prefs.BT_MODE_DEFAULT),
         wired.withMode(Prefs.BT_MODE_DEFAULT),
         bluetooth.withMode(Prefs.BT_MODE_DEFAULT),
+        moduleEnabled,
     )
+
+    /** 返回切换模块总闸后的副本。 */
+    fun withModuleEnabled(value: Boolean): VolumeConfig =
+        VolumeConfig(enabled, mediaSteps, keySteps, speaker, wired, bluetooth, value)
 
     // ==================== 不可变编辑辅助（供 UI） ====================
 
     fun withEnabled(value: Boolean): VolumeConfig =
-        VolumeConfig(value, mediaSteps, keySteps, speaker, wired, bluetooth)
+        VolumeConfig(value, mediaSteps, keySteps, speaker, wired, bluetooth, moduleEnabled)
 
     fun withSteps(media: Int, key: Int): VolumeConfig =
-        VolumeConfig(enabled, media, key, speaker, wired, bluetooth)
+        VolumeConfig(enabled, media, key, speaker, wired, bluetooth, moduleEnabled)
 
     /** 返回把指定设备替换为新配置后的副本。 */
     fun withDevice(d: OutputDevice, c: DeviceConfig): VolumeConfig = when (d) {
-        OutputDevice.WIRED -> VolumeConfig(enabled, mediaSteps, keySteps, speaker, c, bluetooth)
-        OutputDevice.BT -> VolumeConfig(enabled, mediaSteps, keySteps, speaker, wired, c)
-        OutputDevice.SPEAKER -> VolumeConfig(enabled, mediaSteps, keySteps, c, wired, bluetooth)
+        OutputDevice.WIRED -> VolumeConfig(enabled, mediaSteps, keySteps, speaker, c, bluetooth, moduleEnabled)
+        OutputDevice.BT -> VolumeConfig(enabled, mediaSteps, keySteps, speaker, wired, c, moduleEnabled)
+        OutputDevice.SPEAKER -> VolumeConfig(enabled, mediaSteps, keySteps, c, wired, bluetooth, moduleEnabled)
     }
 
     override fun equals(other: Any?): Boolean {
@@ -124,7 +141,8 @@ class VolumeConfig(
         }
         return enabled == other.enabled && mediaSteps == other.mediaSteps &&
             keySteps == other.keySteps && speaker == other.speaker &&
-            wired == other.wired && bluetooth == other.bluetooth
+            wired == other.wired && bluetooth == other.bluetooth &&
+            moduleEnabled == other.moduleEnabled
     }
 
     override fun hashCode(): Int {
@@ -134,12 +152,14 @@ class VolumeConfig(
         result = 31 * result + speaker.hashCode()
         result = 31 * result + wired.hashCode()
         result = 31 * result + bluetooth.hashCode()
+        result = 31 * result + moduleEnabled.hashCode()
         return result
     }
 
     /** 供日志输出的人类可读摘要。 */
     override fun toString(): String =
-        (if (enabled) "on" else "off") +
+        (if (engaged) "on" else "off") +
+            (if (moduleEnabled) "" else "/module-off") +
             ",steps=$mediaSteps" +
             ",keySteps=$keySteps" +
             ",speaker=" + deviceDesc(speaker) +
@@ -165,6 +185,7 @@ class VolumeConfig(
     private fun buildJson(pretty: Boolean): String {
         val json = JsonBuilder(pretty)
         json.obj {
+            bool(KEY_MODULE, moduleEnabled)
             bool(KEY_ENABLED, enabled)
             int(KEY_MEDIA_STEPS, Prefs.clampMediaSteps(mediaSteps))
             int(KEY_KEY_STEPS, Prefs.clampKeySteps(keySteps))
@@ -221,6 +242,7 @@ class VolumeConfig(
 
         // ==== JSON 键名（写出与读入共用，避免字面量漂移） ====
 
+        private const val KEY_MODULE = "module"
         private const val KEY_ENABLED = "enabled"
         private const val KEY_MEDIA_STEPS = "mediaSteps"
         private const val KEY_KEY_STEPS = "keySteps"
@@ -285,6 +307,8 @@ class VolumeConfig(
                     readDevice(devices, KEY_SPEAKER, false),
                     readDevice(devices, KEY_WIRED, false),
                     readDevice(devices, KEY_BT, true),
+                    // 缺 module 键按启用解析：历史暂存/存档未带该字段时不应把模块误判为停用。
+                    boolField(root, KEY_MODULE, true),
                 )
             } catch (t: Throwable) {
                 Log.e(LOG_TAG, "VolumeConfig.fromJson parse failed", t)

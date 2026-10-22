@@ -2,7 +2,7 @@
 <resources>
     <!-- ==================== 应用与模块元信息 ==================== -->
     <string name="app_name">HyperVolume</string>
-    <string name="app_subtitle">蓝牙/有线/外放独立配档位 · 档位 10~100 · 按键段数 10~29</string>
+    <string name="app_subtitle">蓝牙/有线/外放独立配档位</string>
     <string name="module_description">自定义媒体音量档位（10~100）与音量键步进（10~29），并提供蓝牙绝对/相对/默认三种音量控制模式与系统真实曲线查看。</string>
     <string name="xposed_description">自定义媒体音量档位（10~100）与音量键步进（10~29），并提供两种音量控制模式。</string>
 
@@ -47,8 +47,6 @@
     <string name="btn_save">保存修改（修改参数后）</string>
     <string name="btn_restart_bt">重启蓝牙（模式/音量范围调整后）</string>
     <string name="btn_apply_restart">重启系统框架（档位修改后）</string>
-    <string name="btn_reset">恢复系统默认（关闭模块）</string>
-    <string name="reset_summary">把系统音量配置还原为出厂状态，完成后询问是否清除本应用写入的数据</string>
     <string name="ops_hint">修改只暂存于界面，需点「保存修改」才会写入并生效；确认框会列出改动，并按需询问是否立即重启蓝牙/系统框架。</string>
 
     <!-- ==================== 通用按钮与提示 ==================== -->
@@ -126,7 +124,7 @@
     <string name="bt_restart_fail">蓝牙重启命令执行失败（svc / cmd 均不可用）</string>
     <string name="sys_restarting">正在重启系统框架…屏幕将短暂黑屏，本应用会被关闭</string>
     <string name="clear_data_title">清除数据</string>
-    <string name="clear_data_msg">已恢复系统默认。是否同时清除此应用写入的所有数据（配置与日志）？</string>
+    <string name="clear_data_msg">将清除此应用写入系统的所有数据（生效配置、开机脚本与模块日志），本地暂存与界面偏好不受影响。是否继续？</string>
     <string name="clear_data_confirm">清除</string>
     <string name="data_cleared">已清除应用配置与日志。</string>
     <string name="restart_system_title">重启系统框架</string>
@@ -136,6 +134,7 @@
     <string name="restart_what_bt">蓝牙</string>
     <string name="restart_what_sys">系统框架</string>
     <string name="restart_now_msg">改动已保存。需重启%1$s才能生效，是否立即重启？</string>
+    <string name="change_module">启用模块：%1$s → %2$s</string>
     <string name="change_enabled">启用档位修改：%1$s → %2$s</string>
     <string name="change_steps">档位：%1$d → %2$d</string>
     <string name="change_key_steps">音量键步进：%1$d → %2$d</string>
@@ -211,6 +210,8 @@
     <string name="tab_general">通用</string>
     <string name="tab_backup">备份与恢复</string>
     <string name="tab_troubleshoot">故障排除</string>
+    <string name="pref_module">启用模块</string>
+    <string name="pref_module_summary">总开关，关闭后本模块不再干预系统音量；改动需点「保存修改」下发，重启系统框架后完全生效</string>
     <string name="pref_language">语言</string>
     <string name="pref_theme">颜色</string>
     <string name="pref_language_summary">切换界面语言，选定后立即生效（不影响系统语言）</string>
@@ -227,6 +228,8 @@
     <string name="backup_export_summary">把当前配置与偏好保存为 .json 文件</string>
     <string name="backup_import">导入备份</string>
     <string name="backup_import_summary">从 .json 存档恢复配置与偏好</string>
+    <string name="btn_clear_data">清除数据</string>
+    <string name="clear_data_summary">清除本应用写入系统的配置、开机脚本与模块日志，保留本地暂存与界面偏好</string>
     <string name="backup_file_name">HyperVolume-backup.json</string>
     <string name="backup_export_ok">已导出备份（%1$d 项记录）</string>
     <string name="backup_export_fail">导出失败：%1$s</string>
@@ -299,5 +302,5 @@
     <string name="license_libxposed_summary">Apache License 2.0 · LSPosed 现代 API</string>
 
     <!-- ==================== 使用说明（关于页） ==================== -->
-    <string name="guide_text" formatted="false">1. 在 LSPosed 中启用本模块，然后重启系统框架（主页按钮即可）。\n2. 媒体音量档位：可设置 10~100 档（HyperOS 原生默认 15），档位即音量条的可分辨精度，只影响媒体流（音乐/视频）；修改档位后点「重启系统框架」，期间黑屏属正常现象。音量键步进（10~29 段）控制每按一次音量键跳过的档位数（约＝档位÷段数），只影响按键、不影响屏幕拖动。\n3. 绝对音量模式：蓝牙保持绝对音量映射（档位经曲线映射为 AVRCP 0~127）；第 1 档=最小音量、最高档=最大音量。\n4. 相对音量模式（低音量问题首选）：停用绝对音量，由手机端软件衰减音频信号，耳机固定自身硬件音量。\n5. 默认模式：不改档位数、不加自定义曲线，把系统档位在所选最小/最大范围内线性等分重映射，两端锚到 min/max、中间保留 ROM 原生响度曲线（满量程即直通）；可在曲线图切换纵轴口径（dB 线性/感知响度）查看该原生曲线。\n6. 设备选项卡在「蓝牙/有线耳机/外放」间切换，各设备独立保存模式与范围（打开 App 会自动定位到当前输出设备）。绝对音量仅蓝牙可选；相对音量对三种设备都按各自范围在系统侧衰减；默认则该设备把系统档位在所选最小/最大范围内线性映射、中间保留 ROM 原生响度曲线（满量程即直通）。档位数与音量键步进为全局共用。\n7. 生效方式：点「保存修改」保存参数，按提示确认重启。切换模式或调整音量范围后需点「重启蓝牙」生效；仅档位修改后需点「重启系统框架」（音量键步进即时生效）。\n8. 恢复默认：到「设置 → 故障排除 → 恢复系统默认」一键还原并重启生效，完成后会询问是否清除本应用写入的数据；也可在 LSPosed 中停用模块后重启手机。\n9. 排查：状态区查看媒体档位是否生效；在「设置 → 故障排除 → 模块日志」查看模块自写日志。</string>
+    <string name="guide_text" formatted="false">1. 在 LSPosed 中启用本模块，然后重启系统框架（主页按钮即可）。\n2. 媒体音量档位：可设置 10~100 档（HyperOS 原生默认 15），档位即音量条的可分辨精度，只影响媒体流（音乐/视频）；修改档位后点「重启系统框架」，期间黑屏属正常现象。音量键步进（10~29 段）控制每按一次音量键跳过的档位数（约＝档位÷段数），只影响按键、不影响屏幕拖动。\n3. 绝对音量模式：蓝牙保持绝对音量映射（档位经曲线映射为 AVRCP 0~127）；第 1 档=最小音量、最高档=最大音量。\n4. 相对音量模式（低音量问题首选）：停用绝对音量，由手机端软件衰减音频信号，耳机固定自身硬件音量。\n5. 默认模式：不改档位数、不加自定义曲线，把系统档位在所选最小/最大范围内线性等分重映射，两端锚到 min/max、中间保留 ROM 原生响度曲线（满量程即直通）；可在曲线图切换纵轴口径（dB 线性/感知响度）查看该原生曲线。\n6. 设备选项卡在「蓝牙/有线耳机/外放」间切换，各设备独立保存模式与范围（打开 App 会自动定位到当前输出设备）。绝对音量仅蓝牙可选；相对音量对三种设备都按各自范围在系统侧衰减；默认则该设备把系统档位在所选最小/最大范围内线性映射、中间保留 ROM 原生响度曲线（满量程即直通）。档位数与音量键步进为全局共用。\n7. 生效方式：点「保存修改」保存参数，按提示确认重启。切换模式或调整音量范围后需点「重启蓝牙」生效；仅档位修改后需点「重启系统框架」（音量键步进即时生效）。\n8. 回到原生行为：在「设置 → 通用」关闭「启用模块」，点「保存修改」后按提示重启系统框架即完全停用；要抹掉本应用写入的数据可用「设置 → 备份与恢复 → 清除数据」；也可在 LSPosed 中停用模块后重启手机。\n9. 排查：状态区查看媒体档位是否生效；在「设置 → 故障排除 → 模块日志」查看模块自写日志。</string>
 </resources>

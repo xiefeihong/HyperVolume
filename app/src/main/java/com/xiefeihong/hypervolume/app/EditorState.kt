@@ -82,9 +82,12 @@ data class EditorState(
     /** 当前模型与已生效基线不一致（存在未保存修改）。 */
     val hasUnsavedChanges: Boolean get() = model.toJson() != lastSavedJson
 
-    /** 生效后的物理档位数：启用时=用户 [mediaSteps]，关闭时=系统默认；用于判定是否需重启系统框架。 */
+    /**
+     * 生效后的物理档位数：模块实际介入时=用户 [mediaSteps]，否则=系统默认；
+     * 用于判定是否需重启系统框架（总闸关闭同样要回落默认档位数）。
+     */
     fun targetPhysicalSteps(cfg: VolumeConfig?): Int =
-        if (cfg == null) systemDefaultSteps else if (cfg.enabled) Prefs.clampMediaSteps(cfg.mediaSteps) else systemDefaultSteps
+        if (cfg == null) systemDefaultSteps else if (cfg.engaged) Prefs.clampMediaSteps(cfg.mediaSteps) else systemDefaultSteps
 
     // ==================== 交互：设备 / 模式 ====================
 

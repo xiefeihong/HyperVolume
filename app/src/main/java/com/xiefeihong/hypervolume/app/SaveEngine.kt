@@ -41,17 +41,16 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
      *
      * @param state 当前编辑态；其 `model` 即待保存配置（Compose 侧每次交互都已回写模型，
      *              等价旧实现进入保存前先调 `writeUiIntoModel(true)`）
-     * @param forceDefault true=「恢复系统默认」完整重置（关闭总开关、各设备默认直通）
      */
-    fun planSave(state: EditorState, forceDefault: Boolean): SavePlan {
-        val pending = if (forceDefault) store.defaultConfig(state.systemDefaultSteps) else state.model
+    fun planSave(state: EditorState): SavePlan {
+        val pending = state.model
         val base = VolumeConfig.fromJson(state.lastSavedJson)
-        val blocked = !forceDefault && !pending.enabled && pending.anyDeviceNonDefault() &&
+        val blocked = !pending.enabled && pending.anyDeviceNonDefault() &&
             store.capturedSystemDefaultSteps() == null && !store.systemDefaultAcknowledged
         return if (blocked) {
             blockedPlan(state, pending)
         } else {
-            confirmPlan(state, pending, base, fromReset = forceDefault)
+            confirmPlan(state, pending, base)
         }
     }
 
@@ -91,12 +90,12 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
             if (blocked.trustedRealSteps) store.captureSystemDefaultSteps(blocked.steps)
             store.systemDefaultAcknowledged = true
         }
-        return confirmPlan(state, pending, VolumeConfig.fromJson(state.lastSavedJson), fromReset = false)
+        return confirmPlan(state, pending, VolumeConfig.fromJson(state.lastSavedJson))
     }
 
     /** 常规确认计划（旧 `proceedSave`）：与已生效基线比对列出改动，并算出需重启哪些组件。 */
     private fun confirmPlan(
-        state: EditorState, pending: VolumeConfig, base: VolumeConfig?, fromReset: Boolean,
+        state: EditorState, pending: VolumeConfig, base: VolumeConfig?,
     ): SavePlan {
         if (base != null && base.toJson() == pending.toJson()) {
             return SavePlan.Nothing(Messages.saveNone)
@@ -128,7 +127,6 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
             message = message,
             restartBt = !needsSystem && needsBt,
             restartSystem = needsSystem,
-            thenClearData = fromReset,
         )
     }
 
@@ -161,7 +159,7 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
 
     /**
      * 确认保存：落到暂存区并推送系统（旧 `commitSave` + `saveToSystem`）。
-     * 成功后返回后续动作（询问清数据 / 询问重启 / 直接完成），由界面呈现。
+     * 成功后返回后续动作（询问重启 / 直接完成），由界面呈现。
      */
     suspend fun commit(plan: SavePlan.Confirm): CommitResult {
         val push = pushConfig(plan.pending)
@@ -169,7 +167,6 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
             return CommitResult(savedJson = null, followUp = FollowUp.Failed(Messages.pushFail))
         }
         val followUp = when {
-            plan.thenClearData -> FollowUp.AskClearData(plan.restartBt, plan.restartSystem)
             plan.restartBt || plan.restartSystem -> FollowUp.AskRestart(plan.restartBt, plan.restartSystem)
             else -> FollowUp.Done
         }
@@ -180,6 +177,7 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
      * 清除此应用写入的系统侧数据：配置（Settings.Global 键 / 镜像 / boot 脚本 / 被改写的
      * ro 属性）与模块日志。返回新的「已生效基线」JSON（= 当前模型，此后不再提示未保存修改）。
      *
+     * 由「设置 → 备份与恢复 → 清除数据」直接调用（不再附属于某个保存流程）。
      * 刻意**保留**本地 SharedPreferences：其中的原生档位数等属设备环境事实，且清除后框架
      * 未重启时 `getStreamMaxVolume` 仍返回刚退下的旧覆盖值，一并抹掉会导致重启前把它重新误固化。
      */
@@ -318,8 +316,6 @@ sealed interface SavePlan {
         val message: String,
         val restartBt: Boolean,
         val restartSystem: Boolean,
-        /** true=「恢复系统默认」路径，保存成功后追加询问是否清除数据。 */
-        val thenClearData: Boolean,
     ) : SavePlan
 }
 
@@ -331,9 +327,6 @@ sealed interface FollowUp {
 
     /** 推送失败（su 未授权等）。 */
     data class Failed(val message: String) : FollowUp
-
-    /** 保存成功，追加询问是否清除应用写入的数据。 */
-    data class AskClearData(val restartBt: Boolean, val restartSystem: Boolean) : FollowUp
 
     /** 保存成功，询问是否立即重启对应组件使其生效。 */
     data class AskRestart(val restartBt: Boolean, val restartSystem: Boolean) : FollowUp
@@ -362,6 +355,9 @@ internal fun describeChanges(base: VolumeConfig?, pending: VolumeConfig): List<S
         return emptyList()
     }
     val out = mutableListOf<String>()
+    if (base.moduleEnabled != pending.moduleEnabled) {
+        out.add(AppText.str(R.string.change_module, enabledLabel(base.moduleEnabled), enabledLabel(pending.moduleEnabled)))
+    }
     if (base.enabled != pending.enabled) {
         out.add(AppText.str(R.string.change_enabled, enabledLabel(base.enabled), enabledLabel(pending.enabled)))
     }

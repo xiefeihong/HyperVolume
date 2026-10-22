@@ -101,8 +101,8 @@ object BtHooks {
         val result = chain.proceed()
         try {
             val config = XposedKit.readConfig(XposedKit.bluetoothContext())
-            if (config == null || !config.enabled) {
-                return result // 未启用：走系统原始换算
+            if (config == null || !config.engaged) {
+                return result // 模块总闸/档位修改未开：走系统原始换算
             }
             val mode: VolumeMode? = config.bluetoothAvrcpMode()
             if (mode == null) {
@@ -215,7 +215,7 @@ object BtHooks {
     private fun avrcpNativeSend(volumeManager: Class<*>, chain: HookChain): Any? {
         try {
             val config = XposedKit.readConfig(XposedKit.bluetoothContext())
-            if (config == null || !config.enabled ||
+            if (config == null || !config.engaged ||
                 config.modeFor(OutputDevice.BT) != Prefs.BT_MODE_DEFAULT
             ) {
                 return chain.proceed() // 非默认模式不在此处理（模式A/B 各自已有路径）

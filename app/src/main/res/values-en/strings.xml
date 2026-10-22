@@ -2,7 +2,7 @@
 <resources>
     <!-- ==================== 应用与模块元信息 ==================== -->
     <string name="app_name">HyperVolume</string>
-    <string name="app_subtitle">Per-device steps for BT / wired / speaker · steps 10–100 · key segments 10–29</string>
+    <string name="app_subtitle">Per-device steps for BT / wired / speaker</string>
     <string name="module_description">Customize media volume steps (10–100) and volume-key increments (10–29), with Bluetooth absolute / relative / default volume modes and the real system curve view.</string>
     <string name="xposed_description">Customize media volume steps (10–100) and volume-key increments (10–29), with two volume control modes.</string>
 
@@ -47,8 +47,6 @@
     <string name="btn_save">Save (after editing)</string>
     <string name="btn_restart_bt">Restart Bluetooth (after mode/range change)</string>
     <string name="btn_apply_restart">Restart system framework (after step change)</string>
-    <string name="btn_reset">Restore system default (disable)</string>
-    <string name="reset_summary">Return the system volume configuration to its factory state, then offer to clear what this app wrote</string>
     <string name="ops_hint">Edits stay staged in the UI until you tap Save; the confirmation dialog lists every change and asks whether to restart Bluetooth / the system framework right away.</string>
 
     <!-- ==================== 通用按钮与提示 ==================== -->
@@ -126,7 +124,7 @@
     <string name="bt_restart_fail">Bluetooth restart command failed (neither svc nor cmd available)</string>
     <string name="sys_restarting">Restarting the system framework… the screen will briefly go black and this app will close</string>
     <string name="clear_data_title">Clear data</string>
-    <string name="clear_data_msg">System default restored. Also clear everything this app wrote (configuration and logs)?</string>
+    <string name="clear_data_msg">This removes everything the app wrote into the system (the active configuration, the boot script and the module logs). Staged edits and UI preferences are kept. Continue?</string>
     <string name="clear_data_confirm">Clear</string>
     <string name="data_cleared">App configuration and logs cleared.</string>
     <string name="restart_system_title">Restart system framework</string>
@@ -136,6 +134,7 @@
     <string name="restart_what_bt">Bluetooth</string>
     <string name="restart_what_sys">the system framework</string>
     <string name="restart_now_msg">Changes saved. Restart %1$s to apply them — restart now?</string>
+    <string name="change_module">Enable module: %1$s → %2$s</string>
     <string name="change_enabled">Enable step remapping: %1$s → %2$s</string>
     <string name="change_steps">Steps: %1$d → %2$d</string>
     <string name="change_key_steps">Volume-key increment: %1$d → %2$d</string>
@@ -211,6 +210,8 @@
     <string name="tab_general">General</string>
     <string name="tab_backup">Backup</string>
     <string name="tab_troubleshoot">Diagnostics</string>
+    <string name="pref_module">Enable module</string>
+    <string name="pref_module_summary">Master switch; when off this module no longer touches system volume. Apply it with “Save changes” and restart the system framework for full effect</string>
     <string name="pref_language">Language</string>
     <string name="pref_theme">Colour</string>
     <string name="pref_language_summary">Switch the app language right away (system language is untouched)</string>
@@ -227,6 +228,8 @@
     <string name="backup_export_summary">Save current configuration and preferences as a .json file</string>
     <string name="backup_import">Import backup</string>
     <string name="backup_import_summary">Restore configuration and preferences from a .json archive</string>
+    <string name="btn_clear_data">Clear data</string>
+    <string name="clear_data_summary">Remove the configuration, boot script and module logs written by this app; staged edits and UI preferences are kept</string>
     <string name="backup_file_name">HyperVolume-backup.json</string>
     <string name="backup_export_ok">Backup exported (%1$d entries)</string>
     <string name="backup_export_fail">Export failed: %1$s</string>
@@ -299,5 +302,5 @@
     <string name="license_libxposed_summary">Apache License 2.0 · modern LSPosed API</string>
 
     <!-- ==================== 使用说明（关于页） ==================== -->
-    <string name="guide_text" formatted="false">1. Enable this module in LSPosed, then restart the system framework (the button on the home page does it).\n2. Media volume steps: 10–100 (HyperOS ships 15 natively). A step is one distinguishable position on the volume bar and only affects the media stream; after changing steps tap “Restart system framework” — a short black screen is normal. The volume-key increment (10–29 segments) sets how many steps one press skips (about steps ÷ segments) and affects only the keys, not the on-screen slider.\n3. Absolute mode: Bluetooth keeps absolute mapping (steps map through the curve to AVRCP 0–127); step 1 = minimum, top step = maximum.\n4. Relative mode (best fix for quiet low volume): absolute volume is disabled and the phone attenuates the signal with a software curve while the headset stays at its own hardware volume.\n5. Default mode: the step count is untouched and no custom curve is added — system steps are split linearly inside the chosen min/max, both ends anchor to min/max and the middle keeps the ROM native loudness curve (full range = passthrough); switch the chart axis (dB linear / perceived loudness) to inspect that native curve.\n6. The device tabs switch between Bluetooth / wired / speaker and each keeps its own mode and range (the app focuses the current output on launch). Absolute is Bluetooth-only; relative attenuates in the system for all three devices within their own range; default remaps that device’s steps linearly inside min/max keeping the ROM curve. The step count and key increment are global.\n7. Applying: tap Save and confirm the restart prompt. Mode or range changes need “Restart Bluetooth”; step changes need “Restart system framework” (the key increment applies immediately).\n8. Restore defaults: open Settings → Diagnostics → “Restore system default” to reset the configuration, then restart; you will be asked whether to clear what this app wrote. You can also disable the module in LSPosed and reboot.\n9. Troubleshooting: check the status card for the effective step count, and open Settings → Diagnostics → Module log for the module’s own log.</string>
+    <string name="guide_text" formatted="false">1. Enable this module in LSPosed, then restart the system framework (the button on the home page does it).\n2. Media volume steps: 10–100 (HyperOS ships 15 natively). A step is one distinguishable position on the volume bar and only affects the media stream; after changing steps tap “Restart system framework” — a short black screen is normal. The volume-key increment (10–29 segments) sets how many steps one press skips (about steps ÷ segments) and affects only the keys, not the on-screen slider.\n3. Absolute mode: Bluetooth keeps absolute mapping (steps map through the curve to AVRCP 0–127); step 1 = minimum, top step = maximum.\n4. Relative mode (best fix for quiet low volume): absolute volume is disabled and the phone attenuates the signal with a software curve while the headset stays at its own hardware volume.\n5. Default mode: the step count is untouched and no custom curve is added — system steps are split linearly inside the chosen min/max, both ends anchor to min/max and the middle keeps the ROM native loudness curve (full range = passthrough); switch the chart axis (dB linear / perceived loudness) to inspect that native curve.\n6. The device tabs switch between Bluetooth / wired / speaker and each keeps its own mode and range (the app focuses the current output on launch). Absolute is Bluetooth-only; relative attenuates in the system for all three devices within their own range; default remaps that device’s steps linearly inside min/max keeping the ROM curve. The step count and key increment are global.\n7. Applying: tap Save and confirm the restart prompt. Mode or range changes need “Restart Bluetooth”; step changes need “Restart system framework” (the key increment applies immediately).\n8. Back to stock: turn off “Enable module” under Settings → General, tap “Save changes” and restart the system framework as prompted; to erase what this app wrote use Settings → Backup → Clear data. You can also disable the module in LSPosed and reboot.\n9. Troubleshooting: check the status card for the effective step count, and open Settings → Diagnostics → Module log for the module’s own log.</string>
 </resources>

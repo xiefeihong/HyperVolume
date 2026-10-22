@@ -79,7 +79,7 @@ class ConfigStore(context: Context) {
 
     /**
      * 系统默认配置：总开关关闭、各设备默认直通、档位数/步进取系统原生级数。
-     * 供「恢复系统默认」与首次打开界面回落。
+     * 供首次打开（或应用数据被清空）时尚无暂存内容的界面回落。
      */
     fun defaultConfig(systemDefaultSteps: Int): VolumeConfig {
         val steps = Prefs.clampMediaSteps(systemDefaultSteps)

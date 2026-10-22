@@ -18,15 +18,16 @@ import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Backup
+import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.Import
 import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.icon.extended.Report
-import top.yukonga.miuix.kmp.icon.extended.Reset
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.icon.extended.Theme
 import top.yukonga.miuix.kmp.icon.extended.Translate
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.OverlaySpinnerPreference
+import top.yukonga.miuix.kmp.preference.SwitchPreference
 
 /**
  * 设置页：通用 / 备份与恢复 / 故障排除 三区块同页堆叠，一滑到底。
@@ -38,12 +39,12 @@ import top.yukonga.miuix.kmp.preference.OverlaySpinnerPreference
 fun SettingsScreen(state: UiState, vm: HyperVolumeViewModel) {
     PageColumn {
         GeneralSection(state = state, vm = vm)
-        BackupSection(vm)
-        TroubleshootSection(state = state, vm = vm)
+        BackupSection(state = state, vm = vm)
+        TroubleshootSection(vm = vm)
     }
 }
 
-/** 通用：语言与颜色（语言切换后由界面重建 Activity 生效）。 */
+/** 通用：启用模块总闸 + 语言与颜色（语言切换后由界面重建 Activity 生效）。 */
 @Composable
 private fun GeneralSection(state: UiState, vm: HyperVolumeViewModel) {
     // 语言切换后文案会变，不包 remember（remember 内也不能调 stringResource）
@@ -58,6 +59,13 @@ private fun GeneralSection(state: UiState, vm: HyperVolumeViewModel) {
         DropdownItem(stringResource(R.string.theme_dark)),
     )
     SectionCard(title = stringResource(R.string.tab_general)) {
+        SwitchPreference(
+            checked = state.editor.model.moduleEnabled,
+            onCheckedChange = vm::onToggleModule,
+            title = stringResource(R.string.pref_module),
+            summary = stringResource(R.string.pref_module_summary),
+        )
+        SectionDivider()
         OverlaySpinnerPreference(
             items = languageItems,
             selectedIndex = state.language.ordinal,
@@ -77,9 +85,9 @@ private fun GeneralSection(state: UiState, vm: HyperVolumeViewModel) {
     }
 }
 
-/** 备份与恢复：SAF 文档选择器导出/导入 JSON 存档。 */
+/** 备份与恢复：SAF 文档选择器导出/导入 JSON 存档 + 清除本应用写入的系统数据。 */
 @Composable
-private fun BackupSection(vm: HyperVolumeViewModel) {
+private fun BackupSection(state: UiState, vm: HyperVolumeViewModel) {
     val defaultName = stringResource(R.string.backup_file_name)
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument(MIME_JSON),
@@ -103,6 +111,15 @@ private fun BackupSection(vm: HyperVolumeViewModel) {
             onClick = { importLauncher.launch(arrayOf(MIME_JSON, "text/plain", "*/*")) },
         )
         SectionDivider()
+        // 清除数据不跳转子页、只弹确认框，故用无箭头动作行（与旧的「恢复系统默认」入口同形）。
+        BasicComponent(
+            title = stringResource(R.string.btn_clear_data),
+            summary = stringResource(R.string.clear_data_summary),
+            startAction = { Icon(imageVector = MiuixIcons.Delete, contentDescription = null) },
+            onClick = vm::onAskClearData,
+            enabled = !state.busy,
+        )
+        SectionDivider()
         BodyText(stringResource(R.string.backup_scope_title))
         HintText(stringResource(R.string.backup_scope_body))
         HintText(stringResource(R.string.backup_intro))
@@ -110,20 +127,14 @@ private fun BackupSection(vm: HyperVolumeViewModel) {
 }
 
 /**
- * 故障排除：恢复系统默认（自主页操作卡迁入，含其后的清除数据询问）+
- * 调试信息 + 模块日志（均为全屏子页）+ 手动重新检测运行状态。
+ * 故障排除：调试信息 + 模块日志（均为全屏子页）+ 手动重新检测运行状态。
+ *
+ * 「恢复系统默认」入口已取消：它等价于「把全部参数写回默认再保存」，与总闸重复；
+ * 其中的「清除数据」环节保留下来，改放到「备份与恢复」区块。
  */
 @Composable
-private fun TroubleshootSection(state: UiState, vm: HyperVolumeViewModel) {
+private fun TroubleshootSection(vm: HyperVolumeViewModel) {
     SectionCard(title = stringResource(R.string.tab_troubleshoot)) {
-        BasicComponent(
-            title = stringResource(R.string.btn_reset),
-            summary = stringResource(R.string.reset_summary),
-            startAction = { Icon(imageVector = MiuixIcons.Reset, contentDescription = null) },
-            onClick = vm::onResetToDefault,
-            enabled = !state.busy,
-        )
-        SectionDivider()
         ArrowPreference(
             title = stringResource(R.string.debug_info),
             summary = stringResource(R.string.debug_info_summary),

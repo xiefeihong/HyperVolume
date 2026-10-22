@@ -1,6 +1,7 @@
 package com.xiefeihong.hypervolume.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -39,7 +40,7 @@ class VolumeConfigTest {
         val fromPretty = VolumeConfig.fromJson(c.toPrettyJson())
         assertNotNull(fromPretty)
         assertEquals(compact, fromPretty!!.toJson())
-        assertTrue(c.toPrettyJson().startsWith("{\n  \"enabled\": true,"))
+        assertTrue(c.toPrettyJson().startsWith("{\n  \"module\": true,"))
     }
 
     @Test
@@ -52,7 +53,7 @@ class VolumeConfigTest {
         )
         // 键序固定（写出器手写，不受 JSONObject 的 HashMap 顺序影响）；模式A 范围仅蓝牙写。
         assertEquals(
-            "{\"enabled\":true,\"mediaSteps\":50,\"keySteps\":15,\"devices\":{" +
+            "{\"module\":true,\"enabled\":true,\"mediaSteps\":50,\"keySteps\":15,\"devices\":{" +
                 "\"speaker\":{\"mode\":0," +
                 "\"b\":{\"min\":0,\"max\":100,\"curve\":0}," +
                 "\"d\":{\"min\":0,\"max\":50,\"curve\":0}}," +
@@ -158,6 +159,45 @@ class VolumeConfigTest {
         assertNotNull(back)
         assertEquals(Prefs.BT_MODE_DEFAULT, back!!.modeFor(OutputDevice.BT))
         assertEquals(FALLBACK_ABSOLUTE, back.bluetooth.absolute)
+    }
+
+    @Test
+    fun moduleGate_disablesEveryHookCriterion() {
+        // 总闸关闭：即使「启用档位修改」开着且范围已收窄，所有生效判据均给出「不介入」结果
+        val narrowed = VolumeConfig(
+            true, 50, 15,
+            dev(Prefs.BT_MODE_SOFTWARE, Range(0, 127, 0), Range(5, 60, 1), Range(0, 100, 0)),
+            dev(Prefs.BT_MODE_SOFTWARE, Range(0, 127, 0), Range(1, 40, 1), Range(0, 100, 0)),
+            dev(Prefs.BT_MODE_ABSOLUTE, Range(10, 127, 2), Range(0, 100, 0), Range(0, 100, 0)),
+        )
+        assertTrue(narrowed.engaged)
+        assertNotNull(narrowed.activeRangeFor(OutputDevice.WIRED))
+        assertNotNull(narrowed.bluetoothAvrcpMode())
+
+        val off = narrowed.withModuleEnabled(false)
+        assertFalse(off.moduleEnabled)
+        assertTrue(off.enabled) // 主页开关不被总闸改写
+        assertFalse(off.engaged)
+        assertFalse(off.remapActive)
+        assertNull(off.activeRangeFor(OutputDevice.WIRED))
+        assertNull(off.bluetoothAvrcpMode())
+        assertFalse(off.suppressBtAbsoluteVolume())
+        // 其他不可变辅助不得静默丢掉总闸状态
+        assertFalse(off.withEnabled(false).moduleEnabled)
+        assertFalse(off.withSteps(60, 20).moduleEnabled)
+        assertFalse(off.withAllDevicesDefault().moduleEnabled)
+    }
+
+    @Test
+    fun missingModuleKey_isParsedAsEnabled() {
+        // 历史暂存/存档不带 module 键：不能因此把模块误判为停用
+        val back = VolumeConfig.fromJson("""{"enabled":true,"devices":{"bt":{}}}""")
+        assertNotNull(back)
+        assertTrue(back!!.moduleEnabled)
+        assertTrue(back.engaged)
+        // 显式写成字符串 "0" / "false" 同样识别为关闭（手写配置容忍）
+        assertFalse(VolumeConfig.fromJson("""{"module":"0","enabled":true}""")!!.moduleEnabled)
+        assertFalse(VolumeConfig.fromJson("""{"module":false,"enabled":true}""")!!.moduleEnabled)
     }
 
     private companion object {

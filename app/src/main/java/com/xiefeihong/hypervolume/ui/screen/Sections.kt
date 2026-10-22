@@ -114,15 +114,18 @@ fun StepsSection(state: EditorState, preview: Preview, vm: HyperVolumeViewModel)
 fun RangeSection(state: EditorState, preview: Preview, vm: HyperVolumeViewModel) {
     val deviceTabs = ConfigStore.DEVICE_BY_TAB_ORDER.map { deviceTabLabel(it) }
     val tabIndex = deviceTabs.indexOf(deviceTabLabel(state.editingDevice)).coerceAtLeast(0)
-    val modeOptions = listOf(
-        modeLabelShort(Prefs.BT_MODE_ABSOLUTE),
-        modeLabelShort(Prefs.BT_MODE_SOFTWARE),
-        modeLabelShort(Prefs.BT_MODE_DEFAULT),
-    )
-    val modeIndex = when {
-        state.showingDefault -> 2
-        state.absoluteEditing -> 0
-        else -> 1
+    // 模式芯片 = 可选模式 id + 其标签：绝对音量（AVRCP）为蓝牙专属，有线耳机/外放不支持，
+    // 因此**不列出该选项**（旧行为是列出但置灰）；历史配置里的非法绝对模式已由 EditorState 归一。
+    val allowedModes = buildList {
+        if (state.absoluteAllowed) add(Prefs.BT_MODE_ABSOLUTE)
+        add(Prefs.BT_MODE_SOFTWARE)
+        add(Prefs.BT_MODE_DEFAULT)
+    }
+    val modeOptions = allowedModes.map { modeLabelShort(it) }
+    val currentMode = when {
+        state.showingDefault -> Prefs.BT_MODE_DEFAULT
+        state.absoluteEditing -> Prefs.BT_MODE_ABSOLUTE
+        else -> Prefs.BT_MODE_SOFTWARE
     }
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 12.dp)) {
         SmallTitle(text = stringResource(R.string.sec_range))
@@ -135,13 +138,11 @@ fun RangeSection(state: EditorState, preview: Preview, vm: HyperVolumeViewModel)
         Card {
             ChipRow(
                 options = modeOptions,
-                selectedIndex = modeIndex,
-                // 绝对音量为蓝牙专属：外放/有线置灰（选中会由 EditorState 归一为相对音量）
-                enabledAt = { it != 0 || state.absoluteAllowed },
+                selectedIndex = allowedModes.indexOf(currentMode).coerceAtLeast(0),
                 onSelect = { index ->
-                    when (index) {
-                        0 -> vm.onSelectMode(VolumeMode.ABSOLUTE)
-                        1 -> vm.onSelectMode(VolumeMode.SOFTWARE)
+                    when (allowedModes.getOrElse(index) { Prefs.BT_MODE_DEFAULT }) {
+                        Prefs.BT_MODE_ABSOLUTE -> vm.onSelectMode(VolumeMode.ABSOLUTE)
+                        Prefs.BT_MODE_SOFTWARE -> vm.onSelectMode(VolumeMode.SOFTWARE)
                         else -> vm.onSelectDefault()
                     }
                 },
@@ -178,7 +179,7 @@ fun RangeSection(state: EditorState, preview: Preview, vm: HyperVolumeViewModel)
     }
 }
 
-/** 操作卡：未保存/未生效提示 + 保存、重启蓝牙、重启系统框架（「恢复系统默认」已迁至设置-故障排除）。 */
+/** 操作卡：未保存/未生效提示 + 保存、重启蓝牙、重启系统框架。 */
 @Composable
 fun ActionsSection(state: EditorState, snapshot: StatusSnapshot?, busy: Boolean, vm: HyperVolumeViewModel) {
     val pending = when {

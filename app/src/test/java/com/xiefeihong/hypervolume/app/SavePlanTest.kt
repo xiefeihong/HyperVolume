@@ -56,6 +56,13 @@ class SavePlanTest : TextBackedTest() {
     }
 
     @Test
+    fun moduleSwitchChange_isListedFirst() {
+        // 总闸改动排在改动清单最前，与界面阅读顺序一致
+        val base = baseConfig()
+        assertEquals(listOf("启用模块：开启 → 关闭"), describeChanges(base, base.withModuleEnabled(false)))
+    }
+
+    @Test
     fun rangeChange_isListedPerDeviceAndMode() {
         val base = baseConfig()
         val pending = base.withDevice(
