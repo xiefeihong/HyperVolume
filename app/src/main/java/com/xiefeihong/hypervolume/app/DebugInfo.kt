@@ -5,7 +5,6 @@ import android.content.pm.ApplicationInfo
 import android.os.Build
 import com.xiefeihong.hypervolume.R
 import com.xiefeihong.hypervolume.core.AppText
-import com.xiefeihong.hypervolume.core.Prefs
 import com.xiefeihong.hypervolume.core.Shell
 
 /**
@@ -32,14 +31,15 @@ data class DebugSnapshot(
     /** 系统原本的媒体档位数（未受模块改写时的值），与主页档位行的默认值同源。 */
     val systemDefaultSteps: Int,
     val stepsSource: StepsSource,
-    /** `Settings.Global` 中本模块键的原文（空串表示无）。 */
+    /**
+     * 生效配置原文——全应用唯一的一份配置，`Settings.Global` 中本模块键的值（空串表示无）。
+     * 经 `ContentResolver` 直读，**不依赖 root**。
+     */
     val effectiveConfig: String,
-    /** 应用内暂存配置 JSON（空串表示无）。 */
-    val stagedConfig: String,
     val logPaths: List<String>,
 )
 
-/** 调试信息的全部行（含两段配置原文，便于反馈问题时直接粘贴）。 */
+/** 调试信息的全部行（含生效配置原文，便于反馈问题时直接粘贴）。 */
 internal fun debugInfoLines(snapshot: DebugSnapshot): List<String> = buildList {
     addAll(deviceInfoLines(snapshot))
     add(AppText.str(R.string.debug_root, availability(snapshot.rootGranted)))
@@ -49,8 +49,6 @@ internal fun debugInfoLines(snapshot: DebugSnapshot): List<String> = buildList {
     add(AppText.str(R.string.debug_log_paths, snapshot.logPaths.joinToString(AppText.str(R.string.list_separator))))
     add(AppText.str(R.string.debug_config_title))
     add(snapshot.effectiveConfig.ifBlank { AppText.str(R.string.debug_no_config) })
-    add(AppText.str(R.string.debug_local_config_title))
-    add(snapshot.stagedConfig.ifBlank { AppText.str(R.string.debug_no_config) })
 }
 
 /** 关于页「设备信息」的行集（调试信息的硬件/系统子集，不含配置原文）。 */
@@ -76,7 +74,8 @@ private fun installation(installed: Boolean): String =
 /**
  * 采集调试信息快照。
  *
- * 内部走 root shell 读系统配置与 LSPosed 目录（**阻塞**），须与 [StatusProbe.probe] 一样放在 IO 协程里。
+ * 生效配置经 [ConfigStore.readEffectiveJson] 直读（无需 root），因此无 root 时也能交出配置原文；
+ * LSPosed 目录与日志路径仍走 shell（**阻塞**），须与 [StatusProbe.probe] 一样放在 IO 协程里。
  */
 class DebugInfoCollector(
     context: Context,
@@ -88,12 +87,6 @@ class DebugInfoCollector(
 
     fun collect(rootAvailable: Boolean): DebugSnapshot {
         val packageInfo = appContext.packageManager.getPackageInfo(appContext.packageName, 0)
-        val effective = if (rootAvailable) {
-            // `settings get global <key>` 无值时回显字面 null，归一为空串以触发「尚无配置记录」
-            Shell.getGlobalConfig(Prefs.GLOBAL_KEY).output.trim().takeUnless { it.isEmpty() || it == "null" }.orEmpty()
-        } else {
-            ""
-        }
         return DebugSnapshot(
             moduleVersion = packageInfo.versionName ?: "",
             versionCode = packageInfo.longVersionCode,
@@ -114,8 +107,7 @@ class DebugInfoCollector(
             framework = "libxposed API $XPOSED_API_VERSION",
             systemDefaultSteps = probe.systemDefaultSteps(),
             stepsSource = probe.stepsSource(),
-            effectiveConfig = effective,
-            stagedConfig = store.rawJson(),
+            effectiveConfig = store.readEffectiveJson(),
             logPaths = listOf(Shell.SYS_LOG_FILE, Shell.BT_LOG_FILE, "/data/adb/lspd/log/"),
         )
     }

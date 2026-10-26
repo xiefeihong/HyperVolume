@@ -28,7 +28,6 @@ import com.xiefeihong.hypervolume.app.UpdateChecker
 import com.xiefeihong.hypervolume.core.AppText
 import com.xiefeihong.hypervolume.core.NativeVolumeCurve
 import com.xiefeihong.hypervolume.core.OutputDevice
-import com.xiefeihong.hypervolume.core.Prefs
 import com.xiefeihong.hypervolume.core.Shell
 import com.xiefeihong.hypervolume.core.VolumeConfig
 import com.xiefeihong.hypervolume.core.VolumeMode
@@ -51,8 +50,9 @@ import java.io.IOException
  * 这里收敛成单一 [UiState]：交互 = 纯函数换快照（[EditorState] 自身不可变），
  * root / 系统查询 = `suspend` 动作切到 IO，瞬时提示走 [notices]（等价旧 `Toast`）。
  *
- * 冷启动流程与旧 `onCreate` 逐条对应：按当前音频输出定位设备标签、以暂存配置为
- * 「已生效基线」（不虚报未保存修改）、后台读取 ROM 真实曲线、`onResume` 只做状态刷新。
+ * 冷启动流程与旧 `onCreate` 逐条对应：按当前音频输出定位设备标签、直接装载系统里的
+ * 生效配置（全应用唯一一份）并把它作为「已生效基线」（不虚报未保存修改）、
+ * 后台读取 ROM 真实曲线、`onResume` 只做状态刷新。
  */
 class HyperVolumeViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -74,11 +74,16 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
     val notices: SharedFlow<String> = _notices.asSharedFlow()
 
     init {
-        // 冷启动：按当前输出设备定位标签；基线取暂存配置（等价旧 loadConfigIntoUi 末尾的
-        // lastSaved = model），避免首次打开就提示「有未保存的修改」。
+        // 冷启动：按当前输出设备定位标签，界面直接装载系统里的生效配置（全应用唯一一份，
+        // ContentResolver 可读、无需 root）；基线取同一份装载结果（系统侧还没有配置时即回落默认值），
+        // 避免首次打开就提示「有未保存的修改」。
+        // 这里刻意同步读：一次 SettingsProvider 查询比旧版整档 SharedPreferences 加载更轻，
+        // 而改成异步装载会让首帧闪一遍默认值，并在窗口期丢掉用户刚做的编辑。
+        val systemDefault = probe.systemDefaultSteps()
         val cold = EditorState.load(
-            store = store,
-            systemDefaultSteps = probe.systemDefaultSteps(),
+            effective = store.readEffective(),
+            defaultConfig = store.defaultConfig(systemDefault),
+            systemDefaultSteps = systemDefault,
             detectedDevice = probe.detectCurrentDevice(),
         )
         _state = MutableStateFlow(
@@ -142,18 +147,17 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     /**
-     * 统一编辑入口：换快照 → 落暂存区（旧 `onConfigChanged` 的 `persistToPrefs`）。
-     * 预览由界面按新快照重算，无需在此触发。
+     * 统一编辑入口：只换内存快照（不再落盘任何暂存副本）。
+     * 预览由界面按新快照重算，无需在此触发。未保存的编辑只存在于内存，
+     * 重进应用回到生效值，需点「保存修改」才写入系统。
      */
     private fun edit(transform: (EditorState) -> EditorState) {
-        val next = transform(_state.value.editor)
-        _state.update { it.copy(editor = next) }
-        store.persist(next.model)
+        _state.update { it.copy(editor = transform(it.editor)) }
     }
 
     // ==================== 状态刷新 ====================
 
-    /** 一次运行态探测（root / LSPosed / 当前档位 / 蓝牙）；App 数据被清空后自动采纳系统配置。 */
+    /** 一次运行态探测（root / LSPosed / 当前档位 / 蓝牙）。 */
     fun refreshStatus() {
         viewModelScope.launch {
             val snapshot = withContext(Dispatchers.IO) {
@@ -168,18 +172,7 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
                     ),
                 )
             }
-            var editor = _state.value.editor.copy(systemDefaultSteps = snapshot.systemDefaultSteps)
-            if (snapshot.adopted != null) {
-                // 采纳系统侧配置：重载界面（保留当前设备标签）并以采纳值为基线。
-                val reloaded = EditorState.load(
-                    store = store,
-                    systemDefaultSteps = snapshot.systemDefaultSteps,
-                    detectedDevice = null,
-                    keepDevice = editor.editingDevice,
-                )
-                editor = reloaded.markSaved(reloaded.model)
-                notify(AppText.str(R.string.config_adopted))
-            }
+            val editor = _state.value.editor.copy(systemDefaultSteps = snapshot.systemDefaultSteps)
             _state.update { it.copy(status = snapshot, editor = editor) }
         }
     }
@@ -356,18 +349,10 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
 
     // ==================== 备份与恢复 ====================
 
-    /** 导出：本地偏好 + 系统侧生效配置编成 JSON，写入 SAF 选定的 [uri]。 */
+    /** 导出：全应用唯一的一份生效配置 + 本地偏好（环境事实/界面风格）编成 JSON，写入 SAF 选定的 [uri]。 */
     fun exportBackup(uri: Uri) {
         launchBusy {
-            val effective = withContext(Dispatchers.IO) {
-                if (Shell.isRootAvailable()) {
-                    // `settings get global <key>` 无值时回显字面 null，归一为空串
-                    Shell.getGlobalConfig(Prefs.GLOBAL_KEY).output.trim()
-                        .let { if (it.isEmpty() || it == "null") "" else it }
-                } else {
-                    ""
-                }
-            }
+            val effective = withContext(Dispatchers.IO) { store.readEffectiveJson() }
             val records = settings.allPreferences().size
             val json = backup.export(effective)
             val written = runCatching { withContext(Dispatchers.IO) { writeText(uri, json) } }
@@ -381,7 +366,7 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     /**
-     * 导入：解析存档 → 写回本地偏好 → 把备份时的生效配置回写系统（需 root）→ 重载界面。
+     * 导入：解析存档 → 把备份时的唯一一份配置推送到系统（需 root，失败即中止）→ 写回本地偏好 → 重载界面。
      *
      * 存档非法只提示「不是有效的备份文件」，不改动任何现有配置。
      */
@@ -407,36 +392,49 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    /** 导入后半段：写回本地偏好 → 回写系统（需 root）→ 重载界面并提示。 */
+    /**
+     * 导入后半段：配置只有唯一的一份、且只能落在系统里，因此**需 root**。
+     *
+     * 无 root 时整份中止并提示，不留「偏好已恢复、配置却没处可放」的半套状态；
+     * 有 root 时先推送配置（含镜像/开机脚本），推送失败同样中止不动偏好，成功才写回本地偏好并重载界面。
+     */
     private suspend fun applyBackup(content: BackupContent) {
-        backup.applyPreferences(content)
         val restored = VolumeConfig.fromJson(content.effectiveJson)
-        var baseline: VolumeConfig? = null
-        if (restored != null && withContext(Dispatchers.IO) { Shell.isRootAvailable() }) {
+        var pushed: VolumeConfig? = null
+        if (restored != null) {
+            if (!withContext(Dispatchers.IO) { Shell.isRootAvailable() }) {
+                notify(AppText.str(R.string.backup_import_root))
+                return
+            }
             val push = engine.pushConfig(restored)
-            baseline = if (push.verified) push.savedConfig else null
-            if (!push.verified) notify(SaveEngine.Messages.pushFail)
+            if (!push.verified) {
+                notify(SaveEngine.Messages.pushFail)
+                return
+            }
+            pushed = push.savedConfig
         }
-        reloadAfterRestore(baseline)
+        backup.applyPreferences(content)
+        reloadAfterRestore(pushed)
         notify(AppText.str(R.string.backup_import_ok, content.recordCount))
-        if (baseline != null) notify(AppText.str(R.string.backup_imported_restart))
+        if (pushed != null) notify(AppText.str(R.string.backup_imported_restart))
     }
 
     /**
-     * 导入后重载界面：暂存区已是备份内容，基线取回写成功的生效配置模型
-     * （回写失败/无 root 时基线为 null → 界面如实提示「有未保存的修改」）。
+     * 导入后重载界面：模型取系统里刚生效的那一份，基线取回写成功的配置模型；
+     * [baseline] 为 null（存档里没有配置）时基线回落为装载结果，不误报未保存修改。
      */
     private suspend fun reloadAfterRestore(baseline: VolumeConfig?) {
         val systemDefault = withContext(Dispatchers.IO) { probe.systemDefaultSteps() }
         val editor = EditorState.load(
-            store = store,
+            effective = withContext(Dispatchers.IO) { store.readEffective() },
+            defaultConfig = store.defaultConfig(systemDefault),
             systemDefaultSteps = systemDefault,
             detectedDevice = null,
             keepDevice = _state.value.editor.editingDevice,
         )
         _state.update {
             it.copy(
-                editor = editor.markSaved(baseline),
+                editor = editor.markSaved(baseline ?: editor.model),
                 language = settings.language,
                 themeMode = settings.themeMode,
             )

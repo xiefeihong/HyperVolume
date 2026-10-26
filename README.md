@@ -28,20 +28,20 @@
 | Xposed 框架 | libxposed API **102**（`minApiVersion` / `targetApiVersion` 均为 102） |
 | 模块作用域 | `android` / `system` / `com.android.bluetooth`，`staticScope=true`（无需手动勾选目标） |
 
-未 Root 的设备无法使用：档位改写与配置下发都要经过 root 通道。
+未 Root 的设备无法生效：档位改写与配置下发都要经过 root 通道（应用内浏览/编辑生效配置不需要 root，`Settings.Global` 的读取不设权限）。
 
 ## 快速上手
 
 1. 安装 App，在 LSPosed 中启用 **HyperVolume** 模块（作用域已静态声明）。
 2. 打开 App，在「媒体音量档位」卡片打开 **启用档位修改** 开关。
 3. 按需调整档位、按键步进、顶部设备选项卡（蓝牙/有线耳机/外放）的模式与最小/最大范围、映射曲线——右侧曲线图与下方映射表**实时预览**。
-4. 点 **保存修改**，确认框会逐条列出改动，并按需询问重启什么组件：
+4. 点 **保存修改**，确认框会逐条列出改动，并按需询问重启什么组件（修改只存在于界面内存里，重进应用回到生效配置）：
    - 改了**档位数** → 需「重启系统框架」（屏幕短暂黑屏属正常现象）；
    - 改了**模式 / 音量范围** → 通常「重启蓝牙」即可；
    - 音量键步进即时生效。
 5. 想回到原生行为：把设备选 **默认** 模式，或到 **设置 → 通用** 关闭 **启用模块**（保存后按提示重启系统框架即完全停用，参数仍保留）；要抹掉本应用写入系统的配置、开机脚本与日志，用 **设置 → 备份与恢复 → 清除数据**。
 
-排查手段：首页顶栏右上角「刷新检测」与「运行状态」六行检测（模块是否加载、档位数是否生效、当前输出设备等）；**设置 → 故障排除 → 查看模块日志** 读取模块自写日志（支持复制/清理），同页还有「调试信息」（含 root / LSPosed / **默认档位** / 档位数来源 / 日志路径 / 两段配置原文）与「刷新检测」。
+排查手段：首页顶栏右上角「刷新检测」与「运行状态」六行检测（模块是否加载、档位数是否生效、当前输出设备等）；**设置 → 故障排除 → 查看模块日志** 读取模块自写日志（支持复制/清理），同页还有「调试信息」（含 root / LSPosed / **默认档位** / 档位数来源 / 日志路径 / 那唯一一份生效配置原文）与「刷新检测」。
 
 ## 三种模式对比
 
@@ -86,10 +86,10 @@ app/src/main/java/com/xiefeihong/hypervolume/
 │   ├── AudioHooks.kt            #   system_server 侧：档位五重保险 + 音量键接管 + 模式B 软件衰减 + 自愈校正
 │   └── BtHooks.kt               #   com.android.bluetooth 侧：AVRCP 绝对音量曲线替换 + 上报拦截
 ├── app/                         # 应用侧业务逻辑（与界面解耦，可在 JVM 单测直接断言）
-│   ├── ConfigStore.kt           #   SharedPreferences 持久化（整份配置存单键 config_json）
+│   ├── ConfigStore.kt           #   生效配置的唯一读取入口（ContentResolver 直读 Settings.Global）+ 环境事实键
 │   ├── BackupEngine.kt          #   备份与恢复：JSON 存档编解码（配置值写成嵌套对象）+ 偏好写回
 │   ├── StatusProbe.kt           #   运行状态检测：逐行状态文本生成
-│   ├── EditorState.kt           #   编辑态快照（模型 / 暂存 / 基线 / 弹框状态）
+│   ├── EditorState.kt           #   编辑态快照（模型 / 生效基线 / 弹框状态）
 │   ├── PreviewBuilder.kt        #   曲线预览点列 + 等宽映射表文本
 │   └── SaveEngine.kt            #   保存流程：先算 SavePlan（门控/改动/重启判定），再执行 root 动作
 └── ui/                          # Miuix + Compose 界面
@@ -137,21 +137,22 @@ app/src/main/java/com/xiefeihong/hypervolume/
 
 全链路只有一种写出形态，由同一个手写写出器产出（`org.json` 在 JVM 上按 `HashMap` 迭代、键序不稳定，故不用它写出）：
 
-- **缩进两空格**：`SharedPreferences` 暂存、`Settings.Global`、配置镜像与备份里存的都是这一串，便于 `cat` / `settings get` 直接阅读；键序固定，但**内容一致性靠解析后的模型做语义比较**（排版不参与「有无未保存修改」的判定）。
+- **缩进两空格**：`Settings.Global`、配置镜像与备份里存的都是这一串，便于 `cat` / `settings get` 直接阅读；键序固定，但**内容一致性靠解析后的模型做语义比较**（排版不参与「有无未保存修改」的判定）。
 
-历史暂存 / 存档里的紧凑单行串无需迁移：`JSONObject` 的解析天然容忍空白与换行。
+历史存量的紧凑单行串（旧版暂存键 / 旧存档）无需迁移：`JSONObject` 的解析天然容忍空白与换行。
 
-解析面尽量容忍手改：布尔接受 `true/false` 与 `1/0`（含字符串写法）、数字接受 `"50"`、未知键忽略、字段缺失或越界则回落默认并钳制到合法区间；顶层四个键一个都没有（不是本模块的配置）则整份拒绝。`module` 键缺失按 `true` 解析（历史暂存/存档不应被误判为停用）。全程只用双引号、不含单引号，因此嵌入 `settings put global '<v>'`（POSIX 单引号包裹）仍然安全，格式化串的换行也在单引号内原样保留。
+解析面尽量容忍手改：布尔接受 `true/false` 与 `1/0`（含字符串写法）、数字接受 `"50"`、未知键忽略、字段缺失或越界则回落默认并钳制到合法区间；顶层四个键一个都没有（不是本模块的配置）则整份拒绝。`module` 键缺失按 `true` 解析（历史存档不应被误判为停用）。全程只用双引号、不含单引号，因此嵌入 `settings put global '<v>'`（POSIX 单引号包裹）仍然安全，格式化串的换行也在单引号内原样保留。
 
 | 通道 | 位置 | 用途 |
 |---|---|---|
-| App 暂存 | `SharedPreferences("settings")` 单键 `config_json`（格式化 JSON） | 编辑态持久化；另存 `system_default_steps` / 环境事实 |
-| 主通道 | `Settings.Global["volume_steps_hook_config"]`（格式化 JSON） | Hook 端实时读取，`registerContentObserver` 监听变更即时失效缓存 |
+| **唯一一份配置** | `Settings.Global["volume_steps_hook_config"]`（格式化 JSON） | Hook 端实时读取（`registerContentObserver` 监听变更即时失效缓存）；App 端经 `ContentResolver` 直读它装载界面（读取不设权限，写入需 root） |
 | 镜像兜底 | `/data/system/hypervolume_config` | 冷启动早期 SettingsProvider 未就绪时直读（内容与主通道一致；读入时限 8 KB，格式化串实测约 1.1 KB） |
 | 开机脚本 | `/data/adb/post-fs-data.d/hypervolume.sh` | Magisk / KernelSU 最早阶段 `setprop ro.config.media_vol_steps` |
 | 开发者选项 | `Settings.Global["bluetooth_disable_absolute_volume"]` | 模式B 时置 `1` |
 | 模块日志 | `/data/system/hypervolume_sys.log`、`/data/data/com.android.bluetooth/files/hypervolume_bt.log` | App 内「查看模块日志」读取 |
 
+
+应用侧不再有配置副本：`SharedPreferences("settings")` 只留 `system_default_steps` 等环境事实与语言/颜色等界面偏好；界面编辑只存在于内存，重进应用回到生效配置。升级安装残留的旧键 `config_json` 不再读写，导出时也会被丢弃。
 
 `mode`：`0=默认（直通）` / `1=绝对音量`（仅蓝牙，其他设备归一为 2） / `2=相对音量`；`curve`：`0=对数` / `1=线性` / `2=平方根`；`a/b/d` 分别为绝对音量 / 相对音量 / 默认三套范围（`a` 仅蓝牙写）。
 
@@ -162,16 +163,15 @@ app/src/main/java/com/xiefeihong/hypervolume/
 
 ## 备份与恢复
 
-**设置 → 备份与恢复** 经 SAF 导出/导入 `.json` 存档（格式版本 `2`）：
+**设置 → 备份与恢复** 经 SAF 导出/导入 `.json` 存档（格式版本 `3`：配置只有 `global` 一份）：
 
 ```json
 {
   "format": "HyperVolume-backup",
-  "version": 2,
+  "version": 3,
   "createdAt": "2026-10-22T03:00:00",
   "package": "com.xiefeihong.hypervolume",
   "prefs": [
-    { "k": "config_json", "t": "s", "v": { "enabled": true, "mediaSteps": 50, "keySteps": 15, "devices": { "…": {} } } },
     { "k": "system_default_steps", "t": "i", "v": 15 },
     { "k": "ui_language", "t": "s", "v": "zh" }
   ],
@@ -179,9 +179,9 @@ app/src/main/java/com/xiefeihong/hypervolume/
 }
 ```
 
-配置类值（`prefs` 里的 `config_json` 与顶层 `global`）**写成嵌套对象**而非转义字符串，便于直接阅读与改档位；导入时归一回同一个格式化串写回偏好。单字符类型标记 `t`（`s/i/l/f/b/u`）保住 `SharedPreferences` 的强类型。v1 存档（配置为转义字符串）仍可导入；解析不出对象的（空串 / 畸形）原样保留字符串，不静默丢数据。
+顶层 `global`（那唯一一份配置）**写成嵌套对象**而非转义字符串，便于直接阅读与改档位；导入时归一回同一个格式化串后推送系统。`prefs` 只装环境事实与界面偏好，单字符类型标记 `t`（`s/i/l/f/b/u`）保住 `SharedPreferences` 的强类型。v1/v2 存档仍可导入，其 `prefs` 里的 `config_json` 副本被直接丢弃；解析不出对象的（空串 / 畸形）原样保留字符串，不静默丢数据。**导入需要 root**：配置只能落回系统，无 root（或推送失败）时整份中止、不改动任何现有数据。
 
-同一区块还有**清除数据**：以 root 清除本应用写入系统的配置（`Settings.Global` 键 / 镜像文件 / 开机脚本）与模块日志，本地暂存与界面偏好保留；成功后按需询问重启蓝牙与系统框架（刚退下的旧档位数要重启才回落）。
+同一区块还有**清除数据**：以 root 清除本应用写入系统的配置（`Settings.Global` 键 / 镜像文件 / 开机脚本）与模块日志，界面偏好与环境事实保留；成功后按需询问重启蓝牙与系统框架（刚退下的旧档位数要重启才回落）。
 
 模块元数据（`META-INF/xposed/java_init.list`、`module.prop`、`scope.list`）由 `yukihook-compiler` 依据 `HookEntry` 上的注解在编译期生成，源码目录中不手动声明。
 
@@ -230,27 +230,28 @@ keytool -genkeypair -v -keystore release.keystore -storetype PKCS12 \
 
 缺失该文件时 release 退化为**未签名包**，以便 CI / 他机构建不失败。
 
-> ⚠️ **务必备份 `release.keystore` 与口令**：Xposed 模块以 APK 形式安装，一旦密钥丢失就无法用新包覆盖升级（只能卸载重装、丢失应用内暂存配置），发布到 GitHub Release 后也无法撤回。同一个仓库内不要混用 debug 密钥。
+> ⚠️ **务必备份 `release.keystore` 与口令**：Xposed 模块以 APK 形式安装，一旦密钥丢失就无法用新包覆盖升级（只能卸载重装，语言/颜色等本地偏好随之丢失，写进系统的配置不受影响），发布到 GitHub Release 后也无法撤回。同一个仓库内不要混用 debug 密钥。
 
 ## 测试
 
-JVM 单元测试覆盖与界面无关的核心算法，共 **11 个测试类 / 95 个用例**（`failures=0 errors=0`）：
+JVM 单元测试覆盖与界面无关的核心算法，共 **12 个测试类 / 101 个用例**（`failures=0 errors=0`）：
 
 | 测试类 | 覆盖内容 |
 |---|---|
 | `PrefsTest` | 档位/键步 clamp、`keyDelta`、网格吸附 `nextKeyStepUp/Down` 的严格单调性与边界 |
 | `VolumeConfigTest` | JSON 往返序列化、格式化串键序锁定、排版无关的语义相等、非法/缺失字段回落、手工编辑（`1/0`、字符串数字）容忍、模块总闸 `engaged` 判据与缺 `module` 键按启用解析 |
 | `AvrcpTest` | AVRCP 0~127 映射、曲线标签、预览与映射表文本生成 |
-| `EditorStateTest` | 编辑态派生（目标物理档位、未保存判定按配置语义比较） |
+| `EditorStateTest` | 编辑态派生（目标物理档位、未保存判定按配置语义比较）、以生效配置装载与无配置时回落默认 |
 | `PreviewBuilderTest` | 曲线点列与映射表构建 |
 | `SavePlanTest` | 保存计划：门控三选项、改动清单（含「启用模块」条目）、重启判定（系统框架 / 蓝牙） |
 | `StatusLinesTest` | 运行状态各行文本生成 |
-| `BackupFormatTest` | 备份存档往返与类型还原、配置值导出为嵌套对象 / 导入回串、v1 存档兼容、非法存档拒绝 |
-| `DebugInfoLinesTest` | 调试信息各段文本生成 |
+| `BackupFormatTest` | 备份存档往返与类型还原、`global` 导出为嵌套对象 / 导入回串、遗留 `config_json` 两端过滤、v1/v2 存档兼容、非法存档拒绝 |
+| `DebugInfoLinesTest` | 调试信息各段文本生成（只含生效配置一段原文） |
+| `EffectiveConfigParseTest` | 生效配置原文 → 模型的脏值归一（空串 / 字面 `null` / 畸形 / 非本模块键返回 `null`，排版不参与语义） |
 | `UpdateCheckerTest` | 版本比较与更新渠道解析 |
 | `StringResourcesTest` | 中英双语资源键集对齐、插参一致性、`\n` 必须为转义而非物理换行 |
 
-界面与应用侧逻辑已在模拟器（Pixel 3a / API 34）实机验收：状态检测区、开关与禁用态滑条、设备选项卡切换、**有线耳机/外放不再显示「绝对音量」选项**（仅蓝牙列出）、等宽预览摘要与映射表、曲线图双口径切换与轴标签刷新、日志/提示/保存确认弹框、保存失败 Toast、未保存提示行、使用说明；主页顶栏右上角「刷新检测」、主页副标题精简；设置页三区块同页堆叠（无顶部标签）、「启用模块」总闸位于「通用」首行、「清除数据」位于「备份与恢复」末行（其后为备份范围说明）、「故障排除」不再含恢复默认入口；蓝牙未连接时运行状态只写「蓝牙音频设备：未连接」；调试信息新增「默认档位」行且与主页档位行的默认值一致；应用暂存、`Settings.Global` 与配置镜像同为一份格式化 JSON（含 `module` 键），导出存档里配置值为嵌套对象，导入该存档后暂存归一回等价的格式化 JSON；仅改动排版（把格式化串挤成单行）不再被误判为「有未保存修改」。
+界面与应用侧逻辑已在模拟器（Pixel 3a / API 34）实机验收：状态检测区、开关与禁用态滑条、设备选项卡切换、**有线耳机/外放不再显示「绝对音量」选项**（仅蓝牙列出）、等宽预览摘要与映射表、曲线图双口径切换与轴标签刷新、日志/提示/保存确认弹框、保存失败 Toast、未保存提示行、使用说明；主页顶栏右上角「刷新检测」、主页副标题精简；设置页三区块同页堆叠（无顶部标签）、「启用模块」总闸位于「通用」首行、「清除数据」位于「备份与恢复」末行（其后为备份范围说明）、「故障排除」不再含恢复默认入口；蓝牙未连接时运行状态只写「蓝牙音频设备：未连接」；调试信息新增「默认档位」行且与主页档位行的默认值一致；`Settings.Global` 与配置镜像同为一份格式化 JSON（含 `module` 键），界面直接装载它——**无 root 也能读到生效配置**（`ContentResolver` 直读）；未保存的编辑只存在于内存，杀进程重进回到生效值，偏好文件 `settings.xml` 里不再出现 `config_json` 键；调试信息只剩生效配置一段原文；导出存档里配置只出现在 `global`（嵌套对象），导入需要 root、无 root 时整份中止；仅改动排版（把格式化串挤成单行）不再被误判为「有未保存修改」。
 
 > **Hook 运行时行为尚未在真机验证**：模拟器无 HyperOS 环境、无真实音频与蓝牙硬件。`AudioHooks` / `BtHooks` 的实际效果与 root 保存/重启流程需在真机启用模块后确认。
 

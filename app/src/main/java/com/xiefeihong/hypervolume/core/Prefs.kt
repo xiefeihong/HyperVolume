@@ -17,17 +17,11 @@ object Prefs {
     /** SharedPreferences 文件名，必须与 Hook 端读取的文件名一致。 */
     const val PREFS_NAME = "settings"
 
-    /** Settings.Global 备用配置键：Hook 端优先从这里读取（system_server 一定能读到）。 */
+    /** Settings.Global 配置键：全应用**唯一**的一份配置就存这里，App 读它（`ContentResolver`，无需 root）、Hook 端也读它。 */
     const val GLOBAL_KEY = "volume_steps_hook_config"
 
     /** 配置镜像文件：App 以 root 同步写入，Hook 端在 Settings 读取失败时直读该文件兜底。 */
     const val MIRROR_CONFIG_FILE = "/data/system/hypervolume_config"
-
-    /**
-     * App 侧唯一的配置持久化键：整份 [VolumeConfig] 以其 `toJson()` 存此一键，
-     * 读时 [VolumeConfig.fromJson]。取代此前散落的每模式标量键（对象图取代键位映射）。
-     */
-    const val KEY_CONFIG_JSON = "config_json"
 
     /** 首次运行时捕获的系统原生媒体档位数（模块未覆盖时的 getStreamMaxVolume，属环境事实、不入配置文件）。 */
     const val KEY_SYSTEM_DEFAULT_STEPS = "system_default_steps"

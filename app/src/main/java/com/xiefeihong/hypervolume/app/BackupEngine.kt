@@ -2,7 +2,6 @@ package com.xiefeihong.hypervolume.app
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.xiefeihong.hypervolume.core.Prefs
 import com.xiefeihong.hypervolume.core.VolumeConfig
 import org.json.JSONArray
 import org.json.JSONObject
@@ -14,23 +13,23 @@ import java.util.Locale
  * 配置备份与恢复（JSON 存档，对齐 HyperCeiler 的「备份与恢复」职责）。
  *
  * 存档内容两块：
- *  - `prefs`：本模块 SharedPreferences 的全部键值（业务暂存配置 + 档位基线 + 语言/颜色等界面偏好），
- *    值带类型标记（SharedPreferences 支持 String/Int/Long/Boolean/StringSet 五种）；
- *  - `global`：系统侧**已生效**的配置 JSON（`Settings.Global` 中本模块键的内容），
- *    恢复时据此比对「有未保存的修改」，并可选回写系统。
+ *  - `global`：全应用**唯一的一份**配置——系统侧已生效的 `Settings.Global` 内容；
+ *    恢复时只能落回系统（需 root），不再有本地暂存区可放；
+ *  - `prefs`：本模块 SharedPreferences 的键值（**已不含配置**，只剩档位基线等环境事实
+ *    与语言/颜色等界面偏好），值带类型标记（String/Int/Long/Float/Boolean/StringSet）。
  *
  * 配置本身就是一段 JSON，导出时一律**写成嵌套对象**（而非转义字符串），便于用户直接
- * 查看与改档位；导入时对象再经 [ConfigJson.normalize] 归一为全链路唯一的格式化串写回偏好。
+ * 查看与改档位；导入时对象再经 [ConfigJson.normalize] 归一为全链路唯一的格式化串后推送系统。
  * 解析不出对象的（无配置 / 畸形）保持原文，不静默丢数据。
  *
- * 解析与写回都是纯数据操作（不碰 root）；root 推送由调用方经 [SaveEngine.pushConfig] 完成，
+ * 解析与写偏好都是纯数据操作（不碰 root）；root 推送由调用方经 [SaveEngine.pushConfig] 完成，
  * 便于单测覆盖格式校验与类型还原。
  */
 class BackupEngine(context: Context, private val settings: SettingsStore) {
 
     private val appContext: Context = context.applicationContext
 
-    /** 导出当前全部偏好 + 系统侧生效配置，返回可直接写盘的 JSON 文本。 */
+    /** 导出本地偏好（环境事实 + 界面偏好）与唯一的一份生效配置，返回可直接写盘的 JSON 文本。 */
     fun export(effectiveJson: String): String =
         BackupFormat.build(settings.allPreferences(), effectiveJson, appContext.packageName)
 
@@ -56,9 +55,11 @@ internal object BackupFormat {
     private const val FORMAT_VALUE = "HyperVolume-backup"
 
     /** 存档结构版本（未来加字段时递增，过新的存档拒绝导入）。
-     * v2：配置值由转义字符串改写成嵌套 JSON 对象（v1 存档仍可导入）。 */
+     * v2：配置值由转义字符串改写成嵌套 JSON 对象（v1 存档仍可导入）。
+     * v3：偏好里不再含应用暂存配置，配置只有 `global` 一份（v1/v2 存档仍可导入，
+     *     其中的 `config_json` 记录被丢弃）。 */
     private const val VERSION = "version"
-    private const val BACKUP_VERSION = 2
+    private const val BACKUP_VERSION = 3
 
     private const val CREATED_AT = "createdAt"
     private const val PACKAGE = "package"
@@ -101,18 +102,20 @@ internal object BackupFormat {
             val decoded = PreferenceCodec.decode(records.optJSONObject(i)) ?: continue
             values[decoded.first] = decoded.second
         }
-        require(values.isNotEmpty()) { "备份中没有可恢复的记录" }
+        val effectiveJson = ConfigJson.normalize(ConfigJson.toText(root.opt(GLOBAL)))
+        // 旧存档的偏好里可能只剩被丢弃的 `config_json`：只要那唯一一份配置在，仍算可恢复
+        require(values.isNotEmpty() || effectiveJson.isNotEmpty()) { "备份中没有可恢复的记录" }
         return BackupContent(
             recordCount = values.size,
             preferences = values,
-            effectiveJson = ConfigJson.normalize(ConfigJson.toText(root.opt(GLOBAL))),
+            effectiveJson = effectiveJson,
         )
     }
 }
 
 /**
- * 配置文本与存档对象的互转：配置（暂存键 / 生效键）本身就是一段 JSON，
- * 导出时写成嵌套对象便于阅读与手工修改，导入时再归一回唯一的格式化串恢复成字符串偏好。
+ * 配置文本与存档对象的互转：那唯一的一份配置（生效键）本身就是一段 JSON，
+ * 导出时写成嵌套对象便于阅读与手工修改，导入时再归一回唯一的格式化串以便回写系统。
  *
  * 解析失败（空串、畸形、旧版直存文本）一律原样保留字符串，不静默丢数据。
  */
@@ -128,7 +131,7 @@ internal object ConfigJson {
 
     /**
      * 配置文本的**归一化**：能解析成 [VolumeConfig] 的一律重写成全链路唯一的格式化串——
-     * [toText] 拿到的是 `JSONObject.toString()`（无缩进），直接写回偏好会让暂存键多出一种排版。
+     * [toText] 拿到的是 `JSONObject.toString()`（无缩进），直接回写系统会让配置多出一种排版。
      * 解析不出的（空串 / 畸形 / 旧版直存文本）原样返回。
      */
     fun normalize(text: String): String = VolumeConfig.fromJson(text)?.toJson() ?: text
@@ -138,19 +141,25 @@ internal object ConfigJson {
 data class BackupContent(
     val recordCount: Int,
     val preferences: Map<String, Any?>,
-    /** 备份时的系统侧生效配置 JSON（空串表示备份时无 root / 无配置）。 */
+    /** 备份时系统侧的那唯一一份配置（空串表示当时系统侧还没有配置）。 */
     val effectiveJson: String,
 )
 
 /**
  * SharedPreferences 值的 JSON 编解码：以单字符类型标记保住强类型
- * （`config_json` 是 String、`system_default_steps` 是 Int、`system_default_ack` 是 Boolean）。
+ * （`system_default_steps` 是 Int、`system_default_ack` 是 Boolean、语言 tag 是 String）。
+ *
+ * 配置已不再存于偏好，[LEGACY_CONFIG_KEY] 无论出现在导出还是旧存档里都直接丢弃，
+ * 保证存档中只存在 `global` 那一份配置。
  */
 internal object PreferenceCodec {
 
     private const val KEY = "k"
     private const val TYPE = "t"
     private const val VALUE = "v"
+
+    /** 旧版的应用暂存键（升级安装后可能仍残在 settings.xml 里）：不导出也不写回。 */
+    private const val LEGACY_CONFIG_KEY = "config_json"
 
     private const val TYPE_STRING = "s"
     private const val TYPE_INT = "i"
@@ -159,11 +168,11 @@ internal object PreferenceCodec {
     private const val TYPE_BOOLEAN = "b"
     private const val TYPE_SET = "u"
 
-    /** 单条记录 → JSON；类型不受支持（理论上不会发生）返回 null 由调用方跳过。 */
+    /** 单条记录 → JSON；遗留的配置键与不受支持的类型（理论上不会发生）返回 null 由调用方跳过。 */
     fun encode(key: String, value: Any?): JSONObject? = when (value) {
         null -> null
-        is String -> JSONObject().put(KEY, key).put(TYPE, TYPE_STRING)
-            .put(VALUE, stringValue(key, value))
+        is String -> if (key == LEGACY_CONFIG_KEY) null else JSONObject().put(KEY, key).put(TYPE, TYPE_STRING)
+            .put(VALUE, value)
         is Int -> JSONObject().put(KEY, key).put(TYPE, TYPE_INT).put(VALUE, value)
         is Long -> JSONObject().put(KEY, key).put(TYPE, TYPE_LONG).put(VALUE, value)
         is Float -> JSONObject().put(KEY, key).put(TYPE, TYPE_FLOAT).put(VALUE, value.toDouble())
@@ -173,24 +182,13 @@ internal object PreferenceCodec {
         else -> null
     }
 
-    /**
-     * 字符串值的写出形式：配置暂存键的值本身就是一段 JSON，写成对象可读可改；
-     * 其余字符串（语言 tag 等）保持字符串。
-     */
-    private fun stringValue(key: String, value: String): Any =
-        if (key == Prefs.KEY_CONFIG_JSON) ConfigJson.toObject(value) else value
-
-    /** 单条 JSON → 键值；结构非法或类型未知返回 null（跳过该条，不影响其余记录）。 */
+    /** 单条 JSON → 键值；遗留配置键、结构非法或类型未知返回 null（跳过该条，不影响其余记录）。 */
     fun decode(entry: JSONObject?): Pair<String, Any?>? {
         val key = entry?.optString(KEY)?.takeIf { it.isNotEmpty() } ?: return null
         // optString 对 JSON null 返回 "null" 字面量，这里一并挡掉
-        if (key == "null") return null
+        if (key == "null" || key == LEGACY_CONFIG_KEY) return null
         val value: Any? = when (entry.optString(TYPE)) {
-            TYPE_STRING -> {
-                val text = ConfigJson.toText(entry.opt(VALUE))
-                // 配置键恢复成唯一的格式化串，其余字符串（语言 tag 等）原样保留
-                if (key == Prefs.KEY_CONFIG_JSON) ConfigJson.normalize(text) else text
-            }
+            TYPE_STRING -> ConfigJson.toText(entry.opt(VALUE))
             TYPE_INT -> entry.optInt(VALUE)
             TYPE_LONG -> entry.optLong(VALUE)
             TYPE_FLOAT -> entry.optDouble(VALUE).toFloat()

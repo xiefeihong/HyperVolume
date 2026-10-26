@@ -175,6 +175,31 @@ class EditorStateTest {
     // ==================== 曲线 / 基线 / 生效档位 ====================
 
     @Test
+    fun load_takesEffectiveConfigAndFallsBackToDefault() {
+        val cfg = config()
+        val defaults = config(enabled = false, media = 15, key = 15)
+        // 有生效配置：界面模型就是它（全应用唯一一份，不再有本地暂存副本）
+        val fromEffective = EditorState.load(
+            effective = cfg,
+            defaultConfig = defaults,
+            systemDefaultSteps = 15,
+            detectedDevice = OutputDevice.BT,
+        )
+        assertEquals(cfg, fromEffective.model)
+        assertEquals(60, fromEffective.mediaSteps)
+        // 系统侧还没有配置：回落默认配置；基线仍为 null，由调用方冷启动时 markSaved 避免误提示
+        val fromNone = EditorState.load(
+            effective = null,
+            defaultConfig = defaults,
+            systemDefaultSteps = 15,
+            detectedDevice = null,
+        )
+        assertEquals(defaults, fromNone.model)
+        assertTrue(fromNone.hasUnsavedChanges)
+        assertFalse(fromNone.markSaved(fromNone.model).hasUnsavedChanges)
+    }
+
+    @Test
     fun curveChange_writesCurrentSlice() {
         val s = loaded().changeCurve(Prefs.CURVE_SQRT)
         assertEquals(Prefs.CURVE_SQRT, s.curve)

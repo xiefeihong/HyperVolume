@@ -26,7 +26,7 @@
     <string name="label_enable_summary">关闭后全部设备直通系统默认音量</string>
     <string name="label_media_steps">媒体音量档位</string>
     <string name="label_key_steps">音量键步进</string>
-    <string name="media_hint">可设置 10~100 档（默认为系统原生档位）。档位越多，音量条越细、可分辨的档位越多。修改暂存于界面，需点「保存修改」后写入并按提示重启生效。</string>
+    <string name="media_hint">可设置 10~100 档（默认为系统原生档位）。档位越多，音量条越细、可分辨的档位越多。修改只存在于界面，需点「保存修改」才写入系统并按提示重启生效；重进应用会回到生效配置。</string>
     <string name="key_steps_hint">每按一次音量键约跳「档位 ÷ 段数」个档。段数越大跳得越细；屏幕滑条不受此限，可逐档精调。未启用或恢复默认时，步进段数默认等于手机默认档位。</string>
 
     <!-- ==================== 音量范围与曲线 ==================== -->
@@ -47,7 +47,7 @@
     <string name="btn_save">保存修改（修改参数后）</string>
     <string name="btn_restart_bt">重启蓝牙（模式/音量范围调整后）</string>
     <string name="btn_apply_restart">重启系统框架（档位修改后）</string>
-    <string name="ops_hint">修改只暂存于界面，需点「保存修改」才会写入并生效；确认框会列出改动，并按需询问是否立即重启蓝牙/系统框架。</string>
+    <string name="ops_hint">修改只存在于界面，需点「保存修改」才会写入系统并生效；重进应用会回到生效配置。确认框会列出改动，并按需询问是否立即重启蓝牙/系统框架。</string>
 
     <!-- ==================== 通用按钮与提示 ==================== -->
     <string name="dlg_copy">复制</string>
@@ -124,7 +124,7 @@
     <string name="bt_restart_fail">蓝牙重启命令执行失败（svc / cmd 均不可用）</string>
     <string name="sys_restarting">正在重启系统框架…屏幕将短暂黑屏，本应用会被关闭</string>
     <string name="clear_data_title">清除数据</string>
-    <string name="clear_data_msg">将清除此应用写入系统的所有数据（生效配置、开机脚本与模块日志），本地暂存与界面偏好不受影响。是否继续？</string>
+    <string name="clear_data_msg">将清除此应用写入系统的所有数据（生效配置、开机脚本与模块日志），语言/颜色等界面偏好不受影响。是否继续？</string>
     <string name="clear_data_confirm">清除</string>
     <string name="data_cleared">已清除应用配置与日志。</string>
     <string name="restart_system_title">重启系统框架</string>
@@ -204,7 +204,6 @@
     <string name="refresh_summary">重新探测 Root、LSPosed 与当前生效档位</string>
     <string name="logs_cleared">日志文件已清理</string>
     <string name="action_failed">操作失败：%1$s</string>
-    <string name="config_adopted">已从系统读取现有配置并恢复界面</string>
 
     <!-- ==================== 设置页 ==================== -->
     <string name="tab_general">通用</string>
@@ -223,22 +222,23 @@
     <string name="theme_dark">深色</string>
 
     <!-- ==================== 备份与恢复 ==================== -->
-    <string name="backup_intro">备份内容为 JSON 存档：写入系统的生效配置、应用暂存配置、档位基线与语言/颜色等本地偏好。恢复后如需生效，请按提示重启系统框架或蓝牙。</string>
+    <string name="backup_intro">备份内容为 JSON 存档：写入系统的唯一一份生效配置，以及档位基线与语言/颜色等本地偏好。恢复后如需生效，请按提示重启系统框架或蓝牙。</string>
     <string name="backup_export">导出备份</string>
     <string name="backup_export_summary">把当前配置与偏好保存为 .json 文件</string>
     <string name="backup_import">导入备份</string>
     <string name="backup_import_summary">从 .json 存档恢复配置与偏好</string>
     <string name="btn_clear_data">清除数据</string>
-    <string name="clear_data_summary">清除本应用写入系统的配置、开机脚本与模块日志，保留本地暂存与界面偏好</string>
+    <string name="clear_data_summary">清除本应用写入系统的配置、开机脚本与模块日志，保留语言/颜色等界面偏好</string>
     <string name="backup_file_name">HyperVolume-backup.json</string>
     <string name="backup_export_ok">已导出备份（%1$d 项记录）</string>
     <string name="backup_export_fail">导出失败：%1$s</string>
     <string name="backup_import_ok">导入成功（%1$d 项记录）</string>
     <string name="backup_import_fail">导入失败：不是有效的 HyperVolume 备份文件</string>
     <string name="backup_import_error">导入失败：%1$s</string>
+    <string name="backup_import_root">导入备份需要 Root 授权（配置只能写回系统）</string>
     <string name="backup_imported_restart">备份已导入并写入系统，需重启后生效。</string>
     <string name="backup_scope_title">备份包含</string>
-    <string name="backup_scope_body">• 生效配置（Settings.Global 中的本模块键，JSON）\n• 应用暂存配置与未保存修改\n• 系统原生档位数、恢复默认确认标记\n• 语言、颜色等界面偏好\n不包含蓝牙配对信息与 LSPosed 启用状态。</string>
+    <string name="backup_scope_body">• 生效配置（Settings.Global 中的本模块键，全应用唯一一份，JSON）\n• 系统原生档位数、恢复默认确认标记\n• 语言、颜色等界面偏好\n导入需要 Root 授权（配置只能写回系统）。不包含蓝牙配对信息与 LSPosed 启用状态。</string>
 
     <!-- ==================== 故障排除 / 调试信息 ==================== -->
     <string name="debug_info">调试信息</string>
@@ -263,7 +263,6 @@
     <string name="debug_installed">已安装</string>
     <string name="debug_not_installed">未检测到</string>
     <string name="debug_config_title">生效配置（Settings.Global）</string>
-    <string name="debug_local_config_title">应用暂存配置</string>
     <string name="debug_no_config">尚无配置记录</string>
     <string name="debug_log_paths">日志路径：%1$s</string>
 

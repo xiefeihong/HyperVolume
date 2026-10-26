@@ -18,10 +18,12 @@ import org.junit.Test
  *
  * 编解码已从 [BackupEngine] 拆到 [BackupFormat]（不碰 Context / root），因此可在 JVM 直接跑，
  * 无需 Robolectric；`org.json` 由 `testImplementation(libs.json)` 提供真实实现。
+ *
+ * v3 口径：配置只有 `global` 那一份，旧版残留的 `config_json` 偏好不导出也不写回。
  */
 class BackupFormatTest {
 
-    /** 真配置序列化出的暂存值：既能被 [VolumeConfig.fromJson] 解析，也保证导出走「嵌套对象」分支。 */
+    /** 真配置序列化出的格式化串：既能被 [VolumeConfig.fromJson] 解析，也保证 `global` 走「嵌套对象」分支。 */
     private val config = VolumeConfig(
         true, 50, 15,
         DeviceConfig(Prefs.BT_MODE_DEFAULT, Range(0, 127, 0), Range(0, 100, 0), Range(0, 50, 0)),
@@ -33,22 +35,12 @@ class BackupFormatTest {
     private fun backupOf(vararg pairs: Pair<String, Any?>): String =
         BackupFormat.build(linkedMapOf(*pairs), configJson, PACKAGE)
 
-    /** 取存档里某条偏好记录的 `v` 原文（对象或字符串）。 */
-    private fun valueEntry(text: String, key: String): Any {
-        val records = JSONObject(text).getJSONArray("prefs")
-        for (i in 0 until records.length()) {
-            val entry = records.getJSONObject(i)
-            if (entry.getString("k") == key) return entry.get("v")
-        }
-        throw AssertionError("存档中没有 $key")
-    }
-
     /** 配置值经「对象 → 串」往返后键序可能变化（JSONObject 内部不保证顺序），故按解析语义比对。 */
     private fun sameConfig(left: String?, right: String?): Boolean =
         VolumeConfig.fromJson(left)?.toJson() == VolumeConfig.fromJson(right)?.toJson()
 
     @Test
-    fun roundTripKeepsValueTypes() {
+    fun roundTripKeepsValueTypesAndDropsLegacyConfigKey() {
         val source = linkedMapOf<String, Any?>(
             "config_json" to configJson,
             "ui_language" to "en",
@@ -60,10 +52,9 @@ class BackupFormatTest {
         )
         val content = BackupFormat.parse(BackupFormat.build(source, configJson, PACKAGE))
 
-        assertEquals(source.size, content.recordCount)
-        assertTrue("配置值应可还原为等价模型", sameConfig(configJson, content.preferences["config_json"] as String))
-        // 存档里的嵌套对象回读后归一为全链路唯一的格式化串（不退化成无缩进单行）
-        assertEquals(configJson, content.preferences["config_json"])
+        // 遗留的 config_json 不导出也不写回：存档里只有 global 那一份配置
+        assertEquals(source.size - 1, content.recordCount)
+        assertNull("遗留配置键不该进存档", content.preferences["config_json"])
         assertEquals(configJson, content.effectiveJson)
         assertEquals("en", content.preferences["ui_language"])
         assertEquals(15, content.preferences["system_default_steps"])
@@ -71,23 +62,24 @@ class BackupFormatTest {
         assertEquals(0.5f, content.preferences["curve_ratio"])
         assertEquals(true, content.preferences["system_default_ack"])
         assertEquals(setOf("WF-1000XM4", "AirPods Pro"), content.preferences["favorite_devices"])
-        // 系统侧生效配置同样进出无损
+        // 系统侧那唯一一份配置进出无损
         assertTrue(sameConfig(configJson, content.effectiveJson))
     }
 
     @Test
-    fun configValuesAreWrittenAsObjectsNotEscapedStrings() {
-        val text = backupOf("config_json" to configJson)
-        // 暂存配置与 global 都写成嵌套对象，用户可直接阅读/改档位
-        assertTrue(valueEntry(text, "config_json") is JSONObject)
+    fun theSingleConfigIsWrittenAsObjectAndNoCopyRidesInPrefs() {
+        val text = backupOf("ui_language" to "en", "config_json" to configJson)
+        // 唯一一份配置写成嵌套对象，用户可直接阅读/改档位
         assertTrue(JSONObject(text).get("global") is JSONObject)
+        // 偏好里残有旧暂存键时也不写进存档（不至于出现第二份配置）
+        assertFalse(text, text.contains("\"config_json\""))
         // 对象形式落盘，全文不该出现转义引号
         assertFalse(text, text.contains("\\\""))
     }
 
     @Test
-    fun versionOneArchiveWithStringConfigStillImports() {
-        // v1 存档把配置存成转义字符串：仍原样读回，不做对象化假设
+    fun versionOneAndTwoArchivesStillImport() {
+        // 旧存档把配置存成转义字符串且往 prefs 里写了一份副本：配置照旧从 global 恢复，副本丢弃
         val archive = JSONObject()
             .put("format", "HyperVolume-backup")
             .put("version", 1)
@@ -101,26 +93,37 @@ class BackupFormatTest {
             .toString()
         val content = BackupFormat.parse(archive)
         assertEquals(configJson, content.effectiveJson)
-        assertEquals(configJson, content.preferences["config_json"])
+        assertNull(content.preferences["config_json"])
+        // 偏好记录全被丢弃时，只要 global 有配置仍算可恢复
+        assertEquals(0, content.recordCount)
     }
 
     @Test
     fun unparsableConfigTextIsKeptAsPlainString() {
-        // 畸形配置文本解析不出对象：原样保留字符串，不静默丢数据；无生效配置时 global 为空串
-        val text = BackupFormat.build(linkedMapOf("config_json" to "{oops"), "", PACKAGE)
-        assertEquals("{oops", valueEntry(text, "config_json"))
-        val content = BackupFormat.parse(text)
-        assertEquals("{oops", content.preferences["config_json"])
-        assertEquals("", content.effectiveJson)
+        // 畸形配置文本解析不出对象：原样保留，不静默丢数据；无生效配置时 global 为空串
+        val text = BackupFormat.build(linkedMapOf("ui_language" to "en"), "{oops", PACKAGE)
+        assertEquals("{oops", JSONObject(text).get("global"))
+        assertEquals("{oops", BackupFormat.parse(text).effectiveJson)
+        val empty = BackupFormat.build(linkedMapOf("ui_language" to "en"), "", PACKAGE)
+        assertEquals("", BackupFormat.parse(empty).effectiveJson)
     }
 
     @Test
     fun exportIsIndentedReadableJsonWithEnvelope() {
         val text = backupOf("ui_language" to "zh")
         assertTrue(text, text.contains("\"format\": \"HyperVolume-backup\""))
-        assertTrue(text, text.contains("\"version\": 2"))
+        assertTrue(text, text.contains("\"version\": 3"))
         assertTrue(text, text.contains("\"package\": \"$PACKAGE\""))
         assertTrue(text, text.contains("\"createdAt\""))
+    }
+
+    @Test
+    fun codecFiltersLegacyConfigKeyOnBothEnds() {
+        // 导出端：遗留配置键直接不成记录；导入端：旧存档带着它也走不到写回偏好
+        assertNull(PreferenceCodec.encode("config_json", configJson))
+        assertNull(PreferenceCodec.decode(JSONObject().put("k", "config_json").put("t", "s").put("v", configJson)))
+        // 其余字符串键照常保留（语言 tag 等）
+        assertEquals("ui_language" to "en", PreferenceCodec.decode(JSONObject().put("k", "ui_language").put("t", "s").put("v", "en")))
     }
 
     @Test

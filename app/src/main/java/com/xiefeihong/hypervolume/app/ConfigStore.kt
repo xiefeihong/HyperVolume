@@ -2,6 +2,7 @@ package com.xiefeihong.hypervolume.app
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.provider.Settings
 import com.xiefeihong.hypervolume.core.Avrcp
 import com.xiefeihong.hypervolume.core.DeviceConfig
 import com.xiefeihong.hypervolume.core.NativeVolumeCurve
@@ -13,12 +14,13 @@ import com.xiefeihong.hypervolume.core.VolumeMode
 import kotlin.math.roundToInt
 
 /**
- * 应用侧配置仓（移植自旧 `MainActivity`/`ConfigEditor` 的 SharedPreferences 读写职责）。
+ * 应用侧配置仓：全应用**只有一份配置**——写进系统的生效配置（`Settings.Global` 的
+ * [Prefs.GLOBAL_KEY]），本类是它在应用内的唯一读取入口，不再另设本地暂存副本。
  *
- * 界面上的所有编辑先落到内存 [VolumeConfig]，整体以 `toJson()`（全链路唯一的格式化串）暂存于
- * **单一**偏好键 [Prefs.KEY_CONFIG_JSON]；只有「保存修改」才会推送到系统（见 [SaveEngine]）。
- * 因此这里只是「编辑暂存区」，不代表系统生效值——生效基线是上次成功写入系统的配置模型，
- * 与当前模型做语义比较得出是否有未保存修改（见 [EditorState.hasUnsavedChanges]）。
+ * 读取走 `ContentResolver`：Android 读全局设置不需要 root/权限，所以无 root 时界面照样能
+ * 拿到生效值；只有写入才需要 root（见 [SaveEngine]）。界面编辑只改内存快照，与装载时读到的
+ * 生效配置做语义比较得出是否有未保存修改（见 [EditorState.hasUnsavedChanges]）；未保存的编辑
+ * 不落盘，重进应用回到生效值。
  *
  * 另持有两个环境事实键：
  *  - [Prefs.KEY_SYSTEM_DEFAULT_STEPS]：首次探测到的**未被模块改写**的系统原生媒体档位数；
@@ -27,31 +29,26 @@ import kotlin.math.roundToInt
  */
 class ConfigStore(context: Context) {
 
-    private val prefs: SharedPreferences = Prefs.get(context.applicationContext)
+    private val appContext = context.applicationContext
 
-    // ==================== 编辑暂存 ====================
+    private val prefs: SharedPreferences = Prefs.get(appContext)
 
-    /** 暂存的整份配置；缺失/非法返回 `null`（由调用方回落 [defaultConfig]）。 */
-    fun loadModel(): VolumeConfig? = VolumeConfig.fromJson(rawJson())
-
-    /** 暂存配置的原始 JSON（缺失返回空串）。 */
-    fun rawJson(): String = prefs.getString(Prefs.KEY_CONFIG_JSON, "").orEmpty()
-
-    /** 是否已存过配置（App 数据被清空后为 false，此时需按系统侧配置恢复界面）。 */
-    fun hasStoredConfig(): Boolean = prefs.contains(Prefs.KEY_CONFIG_JSON)
-
-    /** 异步落盘（内存即时可见，Hook 端读的是 Settings.Global/镜像，不依赖此处的同步写）。 */
-    fun persist(model: VolumeConfig) {
-        prefs.edit().putString(Prefs.KEY_CONFIG_JSON, model.toJson()).apply()
-    }
+    // ==================== 生效配置（全应用唯一一份） ====================
 
     /**
-     * 同步落盘：仅在「从系统采纳配置」时使用——紧接着还要读回并与系统侧比对，
-     * 语义与旧实现的 `commit()` 一致。
+     * 生效配置原文：`ContentResolver` 直读 `Settings.Global`，无需 root/权限。
+     * 键不存在、读取异常一律归一为空串，由调用方回落 [defaultConfig]。
+     *
+     * 注意：同进程内 SettingsProvider 带有值缓存，刚由 root 侧写入时这里可能读到旧值——
+     * 因此写入后的回读校验走独立的 root `settings get`（见 [SaveEngine.pushConfig]），
+     * 本方法只用于装载界面与展示原文。
      */
-    fun persistBlocking(model: VolumeConfig) {
-        prefs.edit().putString(Prefs.KEY_CONFIG_JSON, model.toJson()).commit()
-    }
+    fun readEffectiveJson(): String =
+        runCatching { Settings.Global.getString(appContext.contentResolver, Prefs.GLOBAL_KEY).orEmpty() }
+            .getOrDefault("")
+
+    /** 生效配置模型；系统侧还没有配置/内容非法返回 `null`（由调用方回落 [defaultConfig]）。 */
+    fun readEffective(): VolumeConfig? = parseEffective(readEffectiveJson())
 
     // ==================== 系统默认档位数 ====================
 
@@ -79,7 +76,7 @@ class ConfigStore(context: Context) {
 
     /**
      * 系统默认配置：总开关关闭、各设备默认直通、档位数/步进取系统原生级数。
-     * 供首次打开（或应用数据被清空）时尚无暂存内容的界面回落。
+     * 供系统侧还没有生效配置（首次安装使用）时的界面回落。
      */
     fun defaultConfig(systemDefaultSteps: Int): VolumeConfig {
         val steps = Prefs.clampMediaSteps(systemDefaultSteps)
@@ -121,5 +118,15 @@ class ConfigStore(context: Context) {
         /** 默认预览纵轴口径选项（与旧 `native_mode_options` 数组同序：感知响度、dB 线性）。 */
         val NATIVE_MODE_OPTIONS: List<NativeVolumeCurve.Mode> =
             listOf(NativeVolumeCurve.Mode.PERCEPTUAL, NativeVolumeCurve.Mode.DB_LINEAR)
+
+        /**
+         * 生效配置原文 → 模型：空串、字面 `null`（`settings get` 无值时的回显）与畸形内容
+         * 一律返回 `null`。纯函数，脏值口径由单测锁定。
+         */
+        internal fun parseEffective(raw: String): VolumeConfig? {
+            val text = raw.trim()
+            if (text.isEmpty() || text == "null") return null
+            return VolumeConfig.fromJson(text)
+        }
     }
 }

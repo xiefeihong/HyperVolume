@@ -33,7 +33,6 @@ class StatusLinesTest : TextBackedTest() {
         bluetoothDevices = devices,
         verdict = verdict,
         pendingText = "",
-        adopted = null,
     )
 
     @Test

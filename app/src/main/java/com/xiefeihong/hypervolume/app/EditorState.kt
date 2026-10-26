@@ -26,9 +26,12 @@ enum class NativeAxis { STEPS, PERCENT }
  *  - 切设备标签只载入切片、不落盘
  */
 data class EditorState(
-    /** 权威配置模型：编辑即时写入此处，持久化与推送都以此为准。 */
+    /** 权威配置模型：编辑只改此处（内存），点「保存修改」才写入系统。 */
     val model: VolumeConfig,
-    /** 上一次成功写入系统（Settings.Global）的生效配置，作为「未保存修改」的语义比较基线。 */
+    /**
+     * 「未保存修改」的语义比较基线：装载界面时读到的生效配置（或紧接着上次成功写入的配置）。
+     * 全应用只有一份配置，不再与本地暂存副本比对；未保存的编辑不落盘，重进应用回到生效值。
+     */
     val lastSaved: VolumeConfig? = null,
     /** 当前编辑的设备维度（对应顶部选项卡）。 */
     val editingDevice: OutputDevice = OutputDevice.SPEAKER,
@@ -241,21 +244,24 @@ data class EditorState(
     companion object {
 
         /**
-         * 从暂存区载入整份配置并定位设备（旧 `loadConfigIntoUi`）。
+         * 以生效配置装载整份界面并定位设备（旧 `loadConfigIntoUi`）。
          *
+         * @param effective 从系统读到的生效配置；`null` 表示系统侧还没有配置（首次安装使用），回落 [defaultConfig]。
+         * @param defaultConfig 无生效配置时的回落值（由 [ConfigStore.defaultConfig] 按原生档位数构造）。
          * @param systemDefaultSteps 系统原生档位数（关闭态滑条回落目标）。
          * @param detectedDevice 非 null 表示按当前音频输出定位设备标签（仅冷启动时传）；
          *                       null 表示保留当前编辑设备（保存后重载，不因当前输出切走）。
          * @param keepDevice 保留快照里已有的编辑设备（`detectedDevice == null` 时生效）。
          */
         fun load(
-            store: ConfigStore,
+            effective: VolumeConfig?,
+            defaultConfig: VolumeConfig,
             systemDefaultSteps: Int,
             detectedDevice: OutputDevice?,
             keepDevice: OutputDevice = OutputDevice.SPEAKER,
             lastSaved: VolumeConfig? = null,
         ): EditorState {
-            val cfg = store.loadModel() ?: store.defaultConfig(systemDefaultSteps)
+            val cfg = effective ?: defaultConfig
             val enabled = cfg.enabled
             val media = Prefs.clampMediaSteps(if (enabled) cfg.mediaSteps else systemDefaultSteps)
             val key = Prefs.clampKeySteps(if (enabled) cfg.keySteps else systemDefaultSteps)

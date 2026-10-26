@@ -10,7 +10,6 @@ import com.xiefeihong.hypervolume.core.NativeVolumeCurve
 import com.xiefeihong.hypervolume.core.OutputDevice
 import com.xiefeihong.hypervolume.core.Prefs
 import com.xiefeihong.hypervolume.core.Shell
-import com.xiefeihong.hypervolume.core.VolumeConfig
 
 /**
  * 运行态探测（移植自旧 `StatusProbe`）。
@@ -120,30 +119,23 @@ class StatusProbe(context: Context, private val store: ConfigStore) {
     // ==================== 状态汇总 ====================
 
     /**
-     * 一次完整探测：root/LSPosed 可用性、系统当前档位、蓝牙连接情况，并在 App 数据被
-     * 清除后首次打开时以系统配置键为准恢复界面（[StatusSnapshot.adopted]）。
+     * 一次完整探测：root/LSPosed 可用性、系统当前档位、蓝牙连接情况，并读到生效配置
+     * （全应用唯一一份，经 `ContentResolver` 直读，不依赖 root）用于档位基线固化判据。
      *
-     * 必须是阻塞调用（内部走 root shell），由 UI 侧的 IO 协程调用。
+     * 内部走 root shell，必须是阻塞调用，由 UI 侧的 IO 协程调用。
      */
     fun probe(input: StatusInput): StatusSnapshot {
         val root = Shell.isRootAvailable()
         val lsposed = Shell.isLsposedPresent()
 
-        // 应用数据被清除后首次打开：以系统配置键为准恢复界面，避免误覆盖已生效的配置。
-        var adopted: VolumeConfig? = null
-        val globalConfig = if (root) VolumeConfig.fromJson(Shell.getGlobalConfig(Prefs.GLOBAL_KEY).output) else null
-        if (root && !store.hasStoredConfig() && globalConfig != null) {
-            store.persistBlocking(globalConfig)
-            adopted = globalConfig
-        }
+        val globalConfig = store.readEffective()
 
         val actualMedia = readStreamMaxSafe(Prefs.STREAM_MUSIC_INDEX)
-        // 首次捕获系统原生媒体档位数：仅当本地与系统侧都未启用覆盖时，读到的才是未被
-        // 模块改写过的真实原生值；否则（已推送生效配置）不固化，避免把覆盖值当默认。
-        val stored = store.loadModel()
-        val enabledNow = stored?.enabled == true
+        // 首次捕获系统原生媒体档位数：仅当生效配置既未开档位修改、也未实际介入时，读到的才是
+        // 未被模块改写过的真实原生值；否则（已推送生效配置）不固化，避免把覆盖值当默认。
+        val configEnabled = globalConfig?.enabled == true
         val systemActive = globalConfig?.remapActive == true
-        if (!enabledNow && !systemActive && store.capturedSystemDefaultSteps() == null &&
+        if (!configEnabled && !systemActive && store.capturedSystemDefaultSteps() == null &&
             actualMedia in 1..100
         ) {
             store.captureSystemDefaultSteps(actualMedia)
@@ -176,7 +168,6 @@ class StatusProbe(context: Context, private val store: ConfigStore) {
             bluetoothDevices = bluetoothDevices(),
             verdict = verdict,
             pendingText = pendingText,
-            adopted = adopted,
         )
     }
 
@@ -299,6 +290,4 @@ data class StatusSnapshot(
     val verdict: ModuleVerdict,
     /** 「是否已生效」文案（已生效时为固定提示，未生效时含当前/目标档位数）。 */
     val pendingText: String,
-    /** 非 null 表示 App 数据被清空后从系统采纳了现有配置，界面需重载并提示。 */
-    val adopted: VolumeConfig?,
 )

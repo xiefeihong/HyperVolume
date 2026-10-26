@@ -26,7 +26,7 @@
     <string name="label_enable_summary">When off, every device falls back to the system default volume</string>
     <string name="label_media_steps">Media volume steps</string>
     <string name="label_key_steps">Volume-key increment</string>
-    <string name="media_hint">10–100 steps are allowed (default is the system native count). More steps mean a finer volume bar with more distinguishable levels. Changes stay in the UI until you tap Save, then follow the restart prompt.</string>
+    <string name="media_hint">10–100 steps are allowed (default is the system native count). More steps mean a finer volume bar with more distinguishable levels. Edits live only in the UI until you tap Save; reopening the app drops back to the active configuration.</string>
     <string name="key_steps_hint">Each volume-key press jumps about “steps ÷ segments” levels. More segments mean smaller jumps; the on-screen slider is not limited and can be tuned one step at a time. When disabled or reset, segments default to the phone’s default step count.</string>
 
     <!-- ==================== 音量范围与曲线 ==================== -->
@@ -47,7 +47,7 @@
     <string name="btn_save">Save (after editing)</string>
     <string name="btn_restart_bt">Restart Bluetooth (after mode/range change)</string>
     <string name="btn_apply_restart">Restart system framework (after step change)</string>
-    <string name="ops_hint">Edits stay staged in the UI until you tap Save; the confirmation dialog lists every change and asks whether to restart Bluetooth / the system framework right away.</string>
+    <string name="ops_hint">Edits stay in the UI until you tap Save — reopening the app drops back to the active configuration. The confirmation dialog lists every change and asks whether to restart Bluetooth / the system framework right away.</string>
 
     <!-- ==================== 通用按钮与提示 ==================== -->
     <string name="dlg_copy">Copy</string>
@@ -124,7 +124,7 @@
     <string name="bt_restart_fail">Bluetooth restart command failed (neither svc nor cmd available)</string>
     <string name="sys_restarting">Restarting the system framework… the screen will briefly go black and this app will close</string>
     <string name="clear_data_title">Clear data</string>
-    <string name="clear_data_msg">This removes everything the app wrote into the system (the active configuration, the boot script and the module logs). Staged edits and UI preferences are kept. Continue?</string>
+    <string name="clear_data_msg">This removes everything the app wrote into the system (the active configuration, the boot script and the module logs). UI preferences such as language and colour are kept. Continue?</string>
     <string name="clear_data_confirm">Clear</string>
     <string name="data_cleared">App configuration and logs cleared.</string>
     <string name="restart_system_title">Restart system framework</string>
@@ -204,7 +204,6 @@
     <string name="refresh_summary">Re-detect root, LSPosed and the current volume steps</string>
     <string name="logs_cleared">Log files cleared</string>
     <string name="action_failed">Operation failed: %1$s</string>
-    <string name="config_adopted">Existing configuration read from the system and restored in the UI</string>
 
     <!-- ==================== 设置页 ==================== -->
     <string name="tab_general">General</string>
@@ -223,22 +222,23 @@
     <string name="theme_dark">Dark</string>
 
     <!-- ==================== 备份与恢复 ==================== -->
-    <string name="backup_intro">A backup is a JSON archive holding the active configuration, the staged app configuration, the step baseline and local preferences such as language and colour. After restoring, restart the system framework or Bluetooth if prompted.</string>
+    <string name="backup_intro">A backup is a JSON archive holding the app’s one and only active configuration written into the system, plus the step baseline and local preferences such as language and colour. After restoring, restart the system framework or Bluetooth if prompted.</string>
     <string name="backup_export">Export backup</string>
     <string name="backup_export_summary">Save current configuration and preferences as a .json file</string>
     <string name="backup_import">Import backup</string>
     <string name="backup_import_summary">Restore configuration and preferences from a .json archive</string>
     <string name="btn_clear_data">Clear data</string>
-    <string name="clear_data_summary">Remove the configuration, boot script and module logs written by this app; staged edits and UI preferences are kept</string>
+    <string name="clear_data_summary">Remove the configuration, boot script and module logs written by this app; UI preferences such as language and colour are kept</string>
     <string name="backup_file_name">HyperVolume-backup.json</string>
     <string name="backup_export_ok">Backup exported (%1$d entries)</string>
     <string name="backup_export_fail">Export failed: %1$s</string>
     <string name="backup_import_ok">Import succeeded (%1$d entries)</string>
     <string name="backup_import_fail">Import failed: not a valid HyperVolume backup file</string>
     <string name="backup_import_error">Import failed: %1$s</string>
+    <string name="backup_import_root">Importing a backup requires root access (the configuration can only be written back into the system)</string>
     <string name="backup_imported_restart">Backup imported and written to the system; a restart is required.</string>
     <string name="backup_scope_title">Backup contents</string>
-    <string name="backup_scope_body">• Active configuration (this module’s Settings.Global key, JSON)\n• Staged app configuration and unsaved edits\n• System native step count and the restore-default acknowledgement flag\n• UI preferences: language, colour, etc.\nBluetooth pairing data and the LSPosed enable state are not included.</string>
+    <string name="backup_scope_body">• Active configuration (this module’s Settings.Global key — the app’s only copy, JSON)\n• System native step count and the restore-default acknowledgement flag\n• UI preferences: language, colour, etc.\nImporting requires root access (the configuration can only go back into the system). Bluetooth pairing data and the LSPosed enable state are not included.</string>
 
     <!-- ==================== 故障排除 / 调试信息 ==================== -->
     <string name="debug_info">Debug info</string>
@@ -263,7 +263,6 @@
     <string name="debug_installed">installed</string>
     <string name="debug_not_installed">not detected</string>
     <string name="debug_config_title">Active configuration (Settings.Global)</string>
-    <string name="debug_local_config_title">Staged app configuration</string>
     <string name="debug_no_config">No configuration recorded yet</string>
     <string name="debug_log_paths">Log paths: %1$s</string>
 

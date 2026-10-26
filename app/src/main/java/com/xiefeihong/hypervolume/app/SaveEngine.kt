@@ -133,15 +133,17 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
     // ==================== 执行：写入系统 ====================
 
     /**
-     * 把配置写入系统（Settings.Global 供 Hook 端实时读取）+ 镜像文件 + boot 脚本 +
-     * 「停用绝对音量」开发者选项；回读解析后的模型与待保存模型做**语义比较**验证
+     * 把全应用**唯一**的一份配置写入系统（Settings.Global 供 Hook 端实时读取）+ 镜像文件 +
+     * boot 脚本 + 「停用绝对音量」开发者选项；回读解析后的模型与待保存模型做**语义比较**验证
      * （排版与字段顺序无关，只有一串格式化 JSON 落盘）。
+     *
+     * 应用侧不再有暂存副本，因此本方法是配置变更落盘的唯一途径；回读刻意用独立的
+     * root `settings get`（新进程无 SettingsProvider 缓存）而非 [ConfigStore.readEffectiveJson]。
      *
      * 全程为 root 阻塞调用，切到 [Dispatchers.IO] 执行。
      */
     suspend fun pushConfig(model: VolumeConfig): PushResult = withContext(Dispatchers.IO) {
-        store.persist(model)
-        val pushJson = model.toJson()           // 全链路唯一形态：格式化串（暂存 / Global / 镜像同源）
+        val pushJson = model.toJson()           // 全链路唯一形态：格式化串（Global / 镜像同源）
         val softwareMode = model.modeFor(OutputDevice.BT) == Prefs.BT_MODE_SOFTWARE
         val active = model.remapActive
         val putResult = Shell.putGlobalConfig(Prefs.GLOBAL_KEY, pushJson)
@@ -157,7 +159,7 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
     }
 
     /**
-     * 确认保存：落到暂存区并推送系统（旧 `commitSave` + `saveToSystem`）。
+     * 确认保存：把当前内存模型推送系统（旧 `commitSave` + `saveToSystem`）。
      * 成功后返回后续动作（询问重启 / 直接完成），由界面呈现。
      */
     suspend fun commit(plan: SavePlan.Confirm): CommitResult {
