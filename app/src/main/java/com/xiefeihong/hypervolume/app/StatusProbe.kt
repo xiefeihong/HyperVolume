@@ -125,8 +125,8 @@ class StatusProbe(context: Context, private val store: ConfigStore) {
      * 内部走 root shell，必须是阻塞调用，由 UI 侧的 IO 协程调用。
      */
     fun probe(input: StatusInput): StatusSnapshot {
-        val root = Shell.isRootAvailable()
-        val lsposed = Shell.isLsposedPresent()
+        // 合并探测：一次 su 同时得到 root 与 LSPosed 两个事实（原为两次进程/授权往返）。
+        val rp = Shell.rootAndLsposed()
 
         val globalConfig = store.readEffective()
 
@@ -158,8 +158,8 @@ class StatusProbe(context: Context, private val store: ConfigStore) {
             AppText.str(R.string.pending_yes, actualMedia, targetMedia)
         }
         return StatusSnapshot(
-            rootGranted = root,
-            lsposedInstalled = lsposed,
+            rootGranted = rp.rootGranted,
+            lsposedInstalled = rp.lsposedInstalled,
             actualMediaSteps = actualMedia,
             systemDefaultSteps = systemDefault,
             stepsSource = stepsSource(),

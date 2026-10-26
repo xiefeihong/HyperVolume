@@ -8,6 +8,7 @@ import com.xiefeihong.hypervolume.core.VolumeConfig
 import com.xiefeihong.hypervolume.core.VolumeMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -21,7 +22,7 @@ class EditorStateTest {
     private val fullSoft = Range(0, Prefs.MEDIA_STEPS_MAX, Prefs.CURVE_LINEAR)
     private val fullDefault = Range(0, Prefs.MEDIA_STEPS_MAX, Prefs.CURVE_LINEAR)
 
-    private fun device(mode: Int, abs: Range, soft: Range, default: Range): DeviceConfig =
+    private fun device(mode: Int, abs: Range?, soft: Range?, default: Range?): DeviceConfig =
         DeviceConfig(mode, abs, soft, default)
 
     private fun config(
@@ -32,8 +33,9 @@ class EditorStateTest {
         speakerMode: Int = Prefs.BT_MODE_DEFAULT,
     ): VolumeConfig = VolumeConfig(
         enabled, media, key,
-        device(speakerMode, fullAbs, fullSoft, fullDefault),
-        device(Prefs.BT_MODE_SOFTWARE, fullAbs, fullSoft, fullDefault),
+        // 外放 / 有线没有模式A 维度（不持久化），夹具与落盘口径对齐留 null
+        device(speakerMode, null, fullSoft, fullDefault),
+        device(Prefs.BT_MODE_SOFTWARE, null, fullSoft, fullDefault),
         device(btMode, fullAbs, fullSoft, fullDefault),
     )
 
@@ -138,7 +140,7 @@ class EditorStateTest {
         assertFalse(s.absoluteAllowed)
         val moved = s.changeRange(5, 40)
         assertEquals(Range(5, 40, moved.curve), moved.model.speaker.software)
-        assertEquals(fullAbs, moved.model.speaker.absolute)
+        assertNull(moved.model.speaker.absolute)
     }
 
     @Test
@@ -157,8 +159,8 @@ class EditorStateTest {
     fun selectDevice_loadsThatDeviceSlice() {
         val cfg = VolumeConfig(
             true, 60, 15,
-            device(Prefs.BT_MODE_DEFAULT, fullAbs, fullSoft, Range(7, 40, Prefs.CURVE_LINEAR)),
-            device(Prefs.BT_MODE_SOFTWARE, fullAbs, fullSoft, fullDefault),
+            device(Prefs.BT_MODE_DEFAULT, null, fullSoft, Range(7, 40, Prefs.CURVE_LINEAR)),
+            device(Prefs.BT_MODE_SOFTWARE, null, fullSoft, fullDefault),
             device(Prefs.BT_MODE_ABSOLUTE, Range(20, 100, Prefs.CURVE_LOG), fullSoft, fullDefault),
         )
         val bt = loaded(cfg, editingDevice = OutputDevice.BT)

@@ -114,6 +114,7 @@
     <string name="resolve_default_mode">使用默认模式</string>
     <string name="resolve_default_steps">使用档位默认值</string>
     <string name="push_fail">写入系统配置失败，请确认 su 已授权</string>
+    <string name="push_verify_fail">配置已写入系统，但回读内容与待保存配置不一致，请重试；若持续出现请查看调试信息。</string>
     <string name="auto_save_fail">自动保存失败：无法写入系统配置，请确认 su 已授权</string>
     <string name="save_done">已保存，无需重启即可生效。</string>
     <string name="save_done_title">保存成功</string>
@@ -265,6 +266,13 @@
     <string name="debug_config_title">生效配置（Settings.Global）</string>
     <string name="debug_no_config">尚无配置记录</string>
     <string name="debug_log_paths">日志路径：%1$s</string>
+    <string name="debug_landing">系统侧落点状态：%1$s</string>
+    <string name="debug_landing_ok">全部命中</string>
+    <string name="landing_no_root">需 Root 授权</string>
+    <string name="landing_global">全局设置</string>
+    <string name="landing_mirror">配置镜像</string>
+    <string name="perf_log_title">性能日志</string>
+    <string name="perf_log_summary">开启后每次保存额外记录一条耗时日志（排障用，会多一次 root 调用）</string>
 
     <!-- ==================== 关于页 ==================== -->
     <string name="about_title">关于</string>

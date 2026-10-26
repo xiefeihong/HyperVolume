@@ -5,6 +5,8 @@ import android.content.pm.ApplicationInfo
 import android.os.Build
 import com.xiefeihong.hypervolume.R
 import com.xiefeihong.hypervolume.core.AppText
+import com.xiefeihong.hypervolume.core.PushMarks
+import com.xiefeihong.hypervolume.core.RootProbe
 import com.xiefeihong.hypervolume.core.Shell
 
 /**
@@ -37,6 +39,11 @@ data class DebugSnapshot(
      */
     val effectiveConfig: String,
     val logPaths: List<String>,
+    /**
+     * 系统侧落点状态（已本地化的未命中落点名列表）：空=全部命中，非空=缺失（如「配置镜像」）；
+     * `null` = root 不可用、无法探测。
+     */
+    val landingMissing: List<String>?,
 )
 
 /** 调试信息的全部行（含生效配置原文，便于反馈问题时直接粘贴）。 */
@@ -47,6 +54,16 @@ internal fun debugInfoLines(snapshot: DebugSnapshot): List<String> = buildList {
     add(AppText.str(R.string.debug_default_steps, snapshot.systemDefaultSteps.toString()))
     add(AppText.str(R.string.debug_steps_source, stepsSourceLabel(snapshot.stepsSource)))
     add(AppText.str(R.string.debug_log_paths, snapshot.logPaths.joinToString(AppText.str(R.string.list_separator))))
+    add(
+        AppText.str(
+            R.string.debug_landing,
+            when {
+                snapshot.landingMissing == null -> AppText.str(R.string.landing_no_root)
+                snapshot.landingMissing.isEmpty() -> AppText.str(R.string.debug_landing_ok)
+                else -> snapshot.landingMissing.joinToString(AppText.str(R.string.list_separator))
+            },
+        ),
+    )
     add(AppText.str(R.string.debug_config_title))
     add(snapshot.effectiveConfig.ifBlank { AppText.str(R.string.debug_no_config) })
 }
@@ -74,8 +91,10 @@ private fun installation(installed: Boolean): String =
 /**
  * 采集调试信息快照。
  *
- * 生效配置经 [ConfigStore.readEffectiveJson] 直读（无需 root），因此无 root 时也能交出配置原文；
- * LSPosed 目录与日志路径仍走 shell（**阻塞**），须与 [StatusProbe.probe] 一样放在 IO 协程里。
+ * root 与 LSPosed 事实由调用方一次 [Shell.rootAndLsposed] 探得后传入（与 [StatusProbe.probe] 共用同一次 su，
+ * 不在此重复探测）；系统侧落点（[Shell.probeLanding]）仅在 root 可用时探测，否则置 `null`。
+ * 生效配置经 [ConfigStore.readEffectiveJson] 直读（无需 root），因此无 root 时也能交出配置原文。
+ * 本方法含阻塞 shell，须放在 IO 协程里。
  */
 class DebugInfoCollector(
     context: Context,
@@ -85,7 +104,7 @@ class DebugInfoCollector(
 
     private val appContext: Context = context.applicationContext
 
-    fun collect(rootAvailable: Boolean): DebugSnapshot {
+    fun collect(probeResult: RootProbe): DebugSnapshot {
         val packageInfo = appContext.packageManager.getPackageInfo(appContext.packageName, 0)
         return DebugSnapshot(
             moduleVersion = packageInfo.versionName ?: "",
@@ -102,14 +121,28 @@ class DebugInfoCollector(
             androidRelease = Build.VERSION.RELEASE.orEmpty(),
             sdkInt = Build.VERSION.SDK_INT,
             incremental = Build.ID.orEmpty(),
-            rootGranted = rootAvailable,
-            lsposedInstalled = Shell.isLsposedPresent(),
+            rootGranted = probeResult.rootGranted,
+            lsposedInstalled = probeResult.lsposedInstalled,
             framework = "libxposed API $XPOSED_API_VERSION",
             systemDefaultSteps = probe.systemDefaultSteps(),
             stepsSource = probe.stepsSource(),
             effectiveConfig = store.readEffectiveJson(),
             logPaths = listOf(Shell.SYS_LOG_FILE, Shell.BT_LOG_FILE, "/data/adb/lspd/log/"),
+            landingMissing = probeLandingLabels(probeResult.rootGranted),
         )
+    }
+
+    /** root 可用时探测落点并把未命中的标记映射为本地化落点名；不可用返回 `null`（无法探测）。 */
+    private fun probeLandingLabels(rootGranted: Boolean): List<String>? {
+        if (!rootGranted) {
+            return null
+        }
+        return Shell.probeLanding().map { marker ->
+            when (marker) {
+                PushMarks.MIRROR -> AppText.str(R.string.landing_mirror)
+                else -> AppText.str(R.string.landing_global)
+            }
+        }
     }
 
     companion object {

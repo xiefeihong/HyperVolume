@@ -18,9 +18,10 @@ class DebugInfoLinesTest : TextBackedTest() {
         source: StepsSource = StepsSource.SERVICE,
         defaultSteps: Int = 15,
         effective: String = "{\n  \"module\": true,\n  \"enabled\": true,\n  \"mediaSteps\": 25\n}",
+        landing: List<String>? = emptyList(),
     ): DebugSnapshot = DebugSnapshot(
-        moduleVersion = "1.1.3",
-        versionCode = 5,
+        moduleVersion = "1.1.5",
+        versionCode = 7,
         buildType = "debug",
         packageName = "com.xiefeihong.hypervolume",
         manufacturer = "Xiaomi",
@@ -36,13 +37,14 @@ class DebugInfoLinesTest : TextBackedTest() {
         stepsSource = source,
         effectiveConfig = effective,
         logPaths = listOf("/data/system/hypervolume_sys.log", "/data/data/com.android.bluetooth/files/hypervolume_bt.log"),
+        landingMissing = landing,
     )
 
     @Test
     fun deviceLinesCoverHardwareAndSystem() {
         val lines = deviceInfoLines(snapshot())
         assertEquals(8, lines.size)
-        assertEquals("模块版本：1.1.3 (5)", lines[0])
+        assertEquals("模块版本：1.1.5 (7)", lines[0])
         assertEquals("构建类型：debug", lines[1])
         assertEquals("包名：com.xiefeihong.hypervolume", lines[2])
         assertEquals("设备：Xiaomi 2210132C", lines[3])
@@ -55,9 +57,9 @@ class DebugInfoLinesTest : TextBackedTest() {
     @Test
     fun debugLinesAppendEnvironmentAndEffectiveConfig() {
         val lines = debugInfoLines(snapshot())
-        // 设备信息 8 行 + Root / LSPosed / 默认档位 / 来源 / 日志路径 + 小标题 + 那唯一一份配置原文
-        assertEquals(15, lines.size)
-        assertEquals("模块版本：1.1.3 (5)", lines[0])
+        // 设备信息 8 行 + Root / LSPosed / 默认档位 / 来源 / 日志路径 / 落点状态 + 小标题 + 那唯一一份配置原文
+        assertEquals(16, lines.size)
+        assertEquals("模块版本：1.1.5 (7)", lines[0])
         assertEquals("Root：可用", lines[8])
         assertEquals("LSPosed：已安装", lines[9])
         assertEquals("默认档位：15", lines[10])
@@ -66,8 +68,9 @@ class DebugInfoLinesTest : TextBackedTest() {
             "日志路径：/data/system/hypervolume_sys.log、/data/data/com.android.bluetooth/files/hypervolume_bt.log",
             lines[12],
         )
-        assertEquals("生效配置（Settings.Global）", lines[13])
-        assertEquals("{\n  \"module\": true,\n  \"enabled\": true,\n  \"mediaSteps\": 25\n}", lines[14])
+        assertEquals("系统侧落点状态：全部命中", lines[13])
+        assertEquals("生效配置（Settings.Global）", lines[14])
+        assertEquals("{\n  \"module\": true,\n  \"enabled\": true,\n  \"mediaSteps\": 25\n}", lines[15])
     }
 
     @Test
@@ -79,6 +82,7 @@ class DebugInfoLinesTest : TextBackedTest() {
                 source = StepsSource.BUILTIN,
                 defaultSteps = 10,
                 effective = "",
+                landing = null,
             ),
         )
         assertEquals("Root：不可用", lines[8])
@@ -86,8 +90,16 @@ class DebugInfoLinesTest : TextBackedTest() {
         // 默认档位行不依赖 root，永远给出当前判定结果
         assertEquals("默认档位：10", lines[10])
         assertEquals("档位数来源：默认", lines[11])
+        // root 不可用时落点无法探测，明确标注需 Root
+        assertEquals("系统侧落点状态：需 Root 授权", lines[13])
         // 配置原文经 ContentResolver 直读，无 root 也不会空白；系统侧还没有配置时用占位句
-        assertEquals("尚无配置记录", lines[14])
+        assertEquals("尚无配置记录", lines[15])
+    }
+
+    @Test
+    fun landingMissingIsListed() {
+        val lines = debugInfoLines(snapshot(landing = listOf("配置镜像")))
+        assertEquals("系统侧落点状态：配置镜像", lines[13])
     }
 
     @Test

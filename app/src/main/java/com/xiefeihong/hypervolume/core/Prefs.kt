@@ -34,6 +34,21 @@ object Prefs {
     const val KEY_SYSTEM_DEFAULT_ACK = "system_default_ack"
 
     /**
+     * 上次烘进 post-fs-data 开机脚本的「生效标志」：与 [KEY_BOOT_SCRIPT_STEPS] 一起构成幂等基线，
+     * 二者与本轮 `(remapActive, mediaSteps)` 一致时跳过脚本重写（属环境事实、非配置副本）。
+     */
+    const val KEY_BOOT_SCRIPT_ACTIVE = "boot_script_active"
+
+    /** 上次烘进开机脚本的媒体档位数（见 [KEY_BOOT_SCRIPT_ACTIVE]）。 */
+    const val KEY_BOOT_SCRIPT_STEPS = "boot_script_steps"
+
+    /**
+     * 性能日志开关：开启时一次保存的 `pushConfig` 额外计一段耗时并写一条 `push perf` 日志
+     * （多一次 root 追加，仅排障时打开）。默认关。
+     */
+    const val KEY_PERF_LOG = "perf_log"
+
+    /**
      * 界面语言偏好：`system` / `zh` / `en`（见 app 层 [AppLanguage] 的 tag）。
      * 只影响本 App 的资源取值，不改系统语言；切换后需重建 Activity 生效。
      */

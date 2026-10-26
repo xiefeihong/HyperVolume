@@ -8,6 +8,7 @@ import com.xiefeihong.hypervolume.core.Range
 import com.xiefeihong.hypervolume.core.VolumeConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -51,6 +52,16 @@ class SavePlanTest : TextBackedTest() {
         assertFalse(readBackMatches(pending.withEnabled(false).toJson(), pending))
         assertFalse(readBackMatches("", pending))
         assertFalse(readBackMatches("null", pending))
+    }
+
+    @Test
+    fun readBackVerification_judgesPersistedContentNotObjectGraph() {
+        // 回归锁形：外放 / 有线的模式A 范围不写进 JSON，内存里带着值也不会落盘。
+        // 校验必须比「归一后的落盘内容」而不是模型对象——按对象比，这类字段会让写入成功却判失败。
+        val pending = baseConfig().withEnabled(true)
+        val persisted = requireNotNull(VolumeConfig.fromJson(pending.toJson()))
+        assertNotEquals(pending, persisted)
+        assertTrue(readBackMatches(pending.toJson(), pending))
     }
 
     @Test
@@ -104,6 +115,15 @@ class SavePlanTest : TextBackedTest() {
         assertEquals("蓝牙", deviceTabLabel(OutputDevice.BT))
         assertEquals("有线耳机", deviceTabLabel(OutputDevice.WIRED))
         assertEquals("外放", deviceTabLabel(OutputDevice.SPEAKER))
+    }
+
+    @Test
+    fun bootScriptShouldRewrite_onlyOnParameterChange() {
+        // 幂等判据：未记录保守必写；参数一致跳过；active 或 steps 任一变化即重写。
+        assertTrue(bootScriptShouldRewrite(true, 100, null))
+        assertFalse(bootScriptShouldRewrite(true, 100, BootScriptRecord(true, 100)))
+        assertTrue(bootScriptShouldRewrite(false, 100, BootScriptRecord(true, 100)))
+        assertTrue(bootScriptShouldRewrite(true, 90, BootScriptRecord(true, 100)))
     }
 
     @Test

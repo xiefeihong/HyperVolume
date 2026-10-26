@@ -92,6 +92,7 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
                 status = null,
                 language = settings.language,
                 themeMode = settings.themeMode,
+                perfLog = store.perfLogEnabled,
             ),
         )
         refreshStatus()
@@ -107,7 +108,17 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
 
     // ==================== 编辑交互 ====================
 
+    /** 切换「启用档位修改」开关（主页主开关；需「保存修改」才下发）。 */
     fun onToggleEnabled(value: Boolean) = edit { it.toggleEnabled(value) }
+
+    /**
+     * 故障排除「性能日志」开关：直接写偏好（无需点「保存修改」），开启后下一次保存
+     * 会多一次 root 追加一条 `push perf` 耗时日志。
+     */
+    fun onTogglePerfLog(value: Boolean) {
+        store.perfLogEnabled = value
+        _state.update { it.copy(perfLog = value) }
+    }
 
     /**
      * 设置-通用「启用模块」总闸：只改模型（同主页开关一样需「保存修改」才下发）。
@@ -269,7 +280,10 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
 
     private fun handleSaveAndRestart(result: SaveAndRestart) {
         if (result.pushFailed) {
-            notify(SaveEngine.Messages.autoSaveFail)
+            notify(
+                if (result.putFailed) SaveEngine.Messages.autoSaveFail
+                else SaveEngine.Messages.pushVerifyFail,
+            )
             return
         }
         markSaved(result.savedConfig)
@@ -317,7 +331,7 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
         _state.update { it.copy(debugLoading = true) }
         viewModelScope.launch {
             val outcome = withContext(Dispatchers.IO) {
-                runCatching { debugCollector.collect(Shell.isRootAvailable()) }
+                runCatching { debugCollector.collect(Shell.rootAndLsposed()) }
             }
             outcome.fold(
                 onSuccess = { snapshot -> _state.update { it.copy(debug = snapshot, debugLoading = false) } },
@@ -408,7 +422,7 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
             }
             val push = engine.pushConfig(restored)
             if (!push.verified) {
-                notify(SaveEngine.Messages.pushFail)
+                notify(push.failMessage)
                 return
             }
             pushed = push.savedConfig
@@ -557,6 +571,8 @@ data class UiState(
     /** 界面语言（与 [SettingsStore] 同步；与 Activity 已生效值不同时界面重建）。 */
     val language: AppLanguage = AppLanguage.SYSTEM,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    /** 故障排除「性能日志」开关（与 [ConfigStore.perfLogEnabled] 同步）。 */
+    val perfLog: Boolean = false,
     /** 模块日志正文；null 表示尚未读取。 */
     val logs: String? = null,
     val logLoading: Boolean = false,

@@ -10,6 +10,7 @@ import com.highcapable.yukihookapi.hook.param.HookChain
 import com.highcapable.yukihookapi.hook.param.PackageParam
 import com.xiefeihong.hypervolume.core.Prefs
 import com.xiefeihong.hypervolume.core.SettingsGlobal
+import com.xiefeihong.hypervolume.core.Shell
 import com.xiefeihong.hypervolume.core.VolumeConfig
 import java.io.File
 import java.io.FileInputStream
@@ -23,6 +24,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.Optional
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 模块共享基础层（YukiHookAPI，作用域：系统框架 + 蓝牙 + Android 系统）。
@@ -53,17 +55,16 @@ object XposedKit {
     /** 蓝牙作用域包名。 */
     const val BT_PACKAGE = "com.android.bluetooth"
 
-    /** 模块自写日志：系统框架侧文件（system_server 可写，root 可读）。 */
-    private const val SYS_LOG_FILE = "/data/system/hypervolume_sys.log"
+    /** 模块自写日志：系统框架侧文件（system_server 可写，root 可读）；绝对路径归一到 [Shell]（const 编译期内联，hook 进程无额外类加载）。 */
+    private const val SYS_LOG_FILE = Shell.SYS_LOG_FILE
 
     /** 备用日志路径（当 /data/system/ 被 SELinux 阻止时使用）。 */
-    private const val SYS_LOG_FILE_FALLBACK = "/data/misc/hypervolume_sys.log"
+    private const val SYS_LOG_FILE_FALLBACK = Shell.SYS_LOG_FILE_FALLBACK
 
-    /** 模块自写日志：蓝牙进程侧文件名（写入蓝牙应用数据目录）。 */
+    /** 模块自写日志：蓝牙进程侧文件名（需拼 filesDir，故保留本地常量）。 */
     private const val BT_LOG_FILE_NAME = "hypervolume_bt.log"
 
-    private const val BT_LOG_FILE_FALLBACK =
-        "/data/data/com.android.bluetooth/files/$BT_LOG_FILE_NAME"
+    private const val BT_LOG_FILE_FALLBACK = Shell.BT_LOG_FILE
 
     /** 单个日志文件大小上限（超过后清空重写，避免无限增长）。 */
     private const val LOG_FILE_MAX_BYTES = 512L * 1024L
@@ -329,6 +330,19 @@ object XposedKit {
     private var sCachedConfig: VolumeConfig? = null
 
     /**
+     * 负面退避：双通道都读不到配置后记下失败时刻，退避期内快路径直接返回 null。
+     * 避免系统侧无配置时，音量键 / VolumeStreamState / AVRCP 转换这些高频热路径每次都走
+     * binder IPC + 文件 stat/open。新配置写入后最多 [CONFIG_MISS_BACKOFF_MS] 即被下一次慢路径读到。
+     */
+    @Volatile
+    private var sConfigMissAtMs = 0L
+
+    private const val CONFIG_MISS_BACKOFF_MS = 5_000L
+
+    /** single-flight：缓存过期时仅首个线程走慢路径，其余沿用旧缓存，杜绝并发 binder 风暴。 */
+    private val sConfigReading = AtomicBoolean(false)
+
+    /**
      * 读取配置（TTL 缓存快路径 + 多重通道兜底，任一成功即返回）。
      *
      *
@@ -339,24 +353,44 @@ object XposedKit {
      * @return 解析后的 [VolumeConfig]（任一通道成功即返回），全部失败返回 null
      */
     fun readConfig(context: Context?): VolumeConfig? {
-        // 缓存快路径：有效期内直接返回已解析配置，跳过 SettingsProvider binder IPC 与镜像文件读。
+        // 缓存快路径 / 负面退避的分支判定抽到纯函数 [decideConfigReadPath]（假时钟可测，见单测）。
         val now = System.currentTimeMillis()
         val cached = sCachedConfig
-        if (cached != null && CONFIG_CACHE_TTL_MS > 0 && now - sConfigCacheAtMs < CONFIG_CACHE_TTL_MS) {
+        when (
+            decideConfigReadPath(
+                nowMs = now, cachedAtMs = sConfigCacheAtMs, missAtMs = sConfigMissAtMs,
+                hasCached = cached != null, ttlMs = CONFIG_CACHE_TTL_MS, backoffMs = CONFIG_MISS_BACKOFF_MS,
+            )
+        ) {
+            ConfigReadPath.CACHE_HIT -> return cached
+            ConfigReadPath.NEGATIVE_SKIP -> return null
+            ConfigReadPath.SLOW_PATH -> Unit
+        }
+        // single-flight：仅首个线程进入慢路径，其余返回当前缓存（含可能过期的 null）。
+        if (!sConfigReading.compareAndSet(false, true)) {
             return cached
         }
-        val fromGlobal = booleanArrayOf(false)
-        val config = readConfigUncached(context, fromGlobal)
-        if (config != null) {
-            sConfigCacheAtMs = System.currentTimeMillis()
-            // 仅当本次确实从 Settings.Global 读到配置时才尝试注册观察器：
-            // system_server 的早期 Context 无 IContentService（getString/observer 均 NPE），
-            // 实际走镜像文件通道，该通道变更无法用 ContentObserver 监听——此时 TTL 即为失效手段。
-            if (fromGlobal[0]) {
-                ensureConfigObserver(context)
+        try {
+            val fromGlobal = booleanArrayOf(false)
+            val config = readConfigUncached(context, fromGlobal)
+            val at = System.currentTimeMillis()
+            if (config != null) {
+                sConfigCacheAtMs = at
+                sConfigMissAtMs = 0L
+                // 仅当本次确实从 Settings.Global 读到配置时才尝试注册观察器：
+                // system_server 的早期 Context 无 IContentService（getString/observer 均 NPE），
+                // 实际走镜像文件通道，该通道变更无法用 ContentObserver 监听——此时 TTL 即为失效手段。
+                if (fromGlobal[0]) {
+                    ensureConfigObserver(context)
+                }
+            } else {
+                // 两通道皆失败：置负面缓存时间戳，退避期内后续命中直接返回 null。
+                sConfigMissAtMs = at
             }
+            return config
+        } finally {
+            sConfigReading.set(false)
         }
-        return config
     }
 
     /**
@@ -450,17 +484,17 @@ object XposedKit {
             null
         } else {
             val buffer = ByteArray(length.toInt())
+            var read = 0
             FileInputStream(file).use { input ->
-                var offset = 0
-                while (offset < buffer.size) {
-                    val count = input.read(buffer, offset, buffer.size - offset)
-                    if (count <= 0) {
-                        break
+                while (read < buffer.size) {
+                    val count = input.read(buffer, read, buffer.size - read)
+                    if (count < 0) {
+                        break // 真 EOF：剩余长度按实际读到的算，不用 0x00 填充后靠 trim 兑
                     }
-                    offset += count
+                    read += count
                 }
             }
-            String(buffer, StandardCharsets.UTF_8).trim()
+            String(buffer, 0, read, StandardCharsets.UTF_8).trim()
         }
     } catch (t: Throwable) {
         logErrorOnce("mirror-read-fail", "read mirror config file failed: $t")
@@ -530,6 +564,28 @@ object XposedKit {
         }
         return null
     }
+}
+
+/** [decideConfigReadPath] 的三种快路径判定结果。 */
+internal enum class ConfigReadPath { CACHE_HIT, NEGATIVE_SKIP, SLOW_PATH }
+
+/**
+ * 热路径读配置的分支判定（纯函数，假时钟注入即可单测，不碰 Android 运行时）：
+ *  - [CACHE_HIT]：有缓存且未过期；
+ *  - [NEGATIVE_SKIP]：无缓存且上次读失败仍在负面退避期内；
+ *  - [SLOW_PATH]：其余情形（含过期、退避到期）需走一次慢路径。
+ */
+internal fun decideConfigReadPath(
+    nowMs: Long, cachedAtMs: Long, missAtMs: Long, hasCached: Boolean,
+    ttlMs: Long, backoffMs: Long,
+): ConfigReadPath {
+    if (hasCached && ttlMs > 0 && nowMs - cachedAtMs < ttlMs) {
+        return ConfigReadPath.CACHE_HIT
+    }
+    if (!hasCached && nowMs - missAtMs < backoffMs) {
+        return ConfigReadPath.NEGATIVE_SKIP
+    }
+    return ConfigReadPath.SLOW_PATH
 }
 
 /**

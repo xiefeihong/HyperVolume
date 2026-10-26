@@ -2,6 +2,7 @@ package com.xiefeihong.hypervolume.core
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -10,7 +11,7 @@ import org.junit.Test
 /**
  * [VolumeConfig] 的 JSON 序列化/解析往返、畸形输入回落、构造期钳制的 JVM 单元测试。
  *
- * 格式化串是全链路唯一的写出形态（暂存 / `Settings.Global` / 镜像 / 备份同源），
+ * 格式化串是全链路唯一的写出形态（`Settings.Global` / 镜像 / 备份同源），
  * 故其键序与字面形式一并锁死；内容一致性靠语义比较，排版不参与。
  */
 class VolumeConfigTest {
@@ -20,8 +21,9 @@ class VolumeConfigTest {
 
     private fun sample(): VolumeConfig = VolumeConfig(
         true, 100, 25,
-        dev(Prefs.BT_MODE_DEFAULT, Range(0, 127, 0), Range(0, 100, 1), Range(0, 100, 0)),
-        dev(Prefs.BT_MODE_SOFTWARE, Range(0, 127, 0), Range(1, 80, 2), Range(0, 100, 0)),
+        // 模式A 范围只对蓝牙持久化：非蓝牙夹具留 null，与落盘口径一致
+        dev(Prefs.BT_MODE_DEFAULT, null, Range(0, 100, 1), Range(0, 100, 0)),
+        dev(Prefs.BT_MODE_SOFTWARE, null, Range(1, 80, 2), Range(0, 100, 0)),
         dev(Prefs.BT_MODE_ABSOLUTE, Range(10, 127, 0), Range(0, 100, 1), Range(0, 100, 0)),
     )
 
@@ -204,6 +206,84 @@ class VolumeConfigTest {
         assertNotNull(back)
         assertEquals(Prefs.BT_MODE_DEFAULT, back!!.modeFor(OutputDevice.BT))
         assertEquals(FALLBACK_ABSOLUTE, back.bluetooth.absolute)
+    }
+
+    @Test
+    fun nonBluetoothAbsolute_isNotPersisted_soItReadsBackNull() {
+        // 模式A 只对蓝牙持久化：外放 / 有线既不写 "a"，读回也必须是 null。
+        // 两侧同口径，默认回落值构造的配置才能无损往返（否则首次保存会被误判为失败）。
+        val cfg = VolumeConfig(
+            true, 100, 29,
+            dev(Prefs.BT_MODE_DEFAULT, null, Range(0, 100, 1), Range(0, 100, 1)),
+            dev(Prefs.BT_MODE_DEFAULT, null, Range(0, 100, 1), Range(0, 100, 1)),
+            dev(Prefs.BT_MODE_ABSOLUTE, Range(8, 127, 0), Range(0, 100, 1), Range(0, 100, 1)),
+        )
+        val back = requireNotNull(VolumeConfig.fromJson(cfg.toJson()))
+        assertNull(back.speaker.absolute)
+        assertNull(back.wired.absolute)
+        assertEquals(Range(8, 127, 0), back.bluetooth.absolute)
+        assertEquals(cfg, back)
+        assertEquals(cfg.toJson(), back.toJson())
+        // 反向锁形：给非蓝牙塞一个模式A 范围，落盘时会被丢弃 → 它不得参与相等判断
+        val polluted = cfg.withDevice(OutputDevice.SPEAKER, cfg.speaker.copy(absolute = Range(8, 127, 0)))
+        assertNotEquals(polluted, VolumeConfig.fromJson(polluted.toJson()))
+    }
+
+    @Test
+    fun roundTripIdentity_allDeviceModeCombinations() {
+        // 属性化往返：3 模式 × 3 设备全组合（含 module/enabled 边界）逐组断言无损往返。
+        // 非蓝牙不落盘模式A（其 absolute 必为 null），且非蓝牙不可处于 ABSOLUTE 模式
+        // （解析会归一为 SOFTWARE）——故非蓝牙只取 DEFAULT/SOFTWARE 两态，保持典范形。
+        val soft = Range(0, 100, 1)
+        val def = Range(0, 100, 0)
+        val btAbs = Range(0, 127, 0)
+        var cases = 0
+        for (module in booleanArrayOf(true, false)) {
+            for (enabled in booleanArrayOf(true, false)) {
+                for (btMode in intArrayOf(Prefs.BT_MODE_DEFAULT, Prefs.BT_MODE_SOFTWARE, Prefs.BT_MODE_ABSOLUTE)) {
+                    for (wiredMode in intArrayOf(Prefs.BT_MODE_DEFAULT, Prefs.BT_MODE_SOFTWARE)) {
+                        for (spkMode in intArrayOf(Prefs.BT_MODE_DEFAULT, Prefs.BT_MODE_SOFTWARE)) {
+                            val cfg = VolumeConfig(
+                                enabled, 50, 20,
+                                dev(spkMode, null, soft, def),
+                                dev(wiredMode, null, soft, def),
+                                dev(btMode, btAbs, soft, def),
+                                module,
+                            )
+                            val back = VolumeConfig.fromJson(cfg.toJson())
+                            assertNotNull("解析失败: mode=$btMode/$wiredMode/$spkMode module=$module", back)
+                            assertEquals(
+                                "往返不等: module=$module enabled=$enabled bt=$btMode wired=$wiredMode spk=$spkMode",
+                                cfg, back,
+                            )
+                            assertEquals(cfg.toJson(), back!!.toJson())
+                            cases++
+                        }
+                    }
+                }
+            }
+        }
+        assertEquals(48, cases)
+    }
+
+    @Test
+    fun roundTripIdentity_dirtyNonBluetoothAbsoluteNormalizesToClean() {
+        // 负例补全组合：给非蓝牙塞入不落盘的 absolute，round-trip 后必然被丢弃、
+        // 与同样的干净配置归一到同一个典范对象（脏字段不得影响相等）。
+        val clean = VolumeConfig(
+            true, 50, 20,
+            dev(Prefs.BT_MODE_SOFTWARE, null, Range(0, 100, 1), Range(0, 100, 0)),
+            dev(Prefs.BT_MODE_DEFAULT, null, Range(0, 100, 1), Range(0, 100, 0)),
+            dev(Prefs.BT_MODE_ABSOLUTE, Range(10, 127, 0), Range(0, 100, 1), Range(0, 100, 0)),
+        )
+        val polluted = clean
+            .withDevice(OutputDevice.SPEAKER, clean.speaker.copy(absolute = Range(8, 127, 2)))
+            .withDevice(OutputDevice.WIRED, clean.wired.copy(absolute = Range(5, 60, 1)))
+        val fromPolluted = requireNotNull(VolumeConfig.fromJson(polluted.toJson()))
+        val fromClean = requireNotNull(VolumeConfig.fromJson(clean.toJson()))
+        assertEquals(fromClean, fromPolluted)
+        assertNull(fromPolluted.speaker.absolute)
+        assertNull(fromPolluted.wired.absolute)
     }
 
     @Test

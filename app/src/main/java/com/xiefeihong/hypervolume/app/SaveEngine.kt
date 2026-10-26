@@ -6,6 +6,7 @@ import com.xiefeihong.hypervolume.core.Avrcp
 import com.xiefeihong.hypervolume.core.DeviceConfig
 import com.xiefeihong.hypervolume.core.OutputDevice
 import com.xiefeihong.hypervolume.core.Prefs
+import com.xiefeihong.hypervolume.core.PushMarks
 import com.xiefeihong.hypervolume.core.Range
 import com.xiefeihong.hypervolume.core.Shell
 import com.xiefeihong.hypervolume.core.VolumeConfig
@@ -133,29 +134,56 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
     // ==================== 执行：写入系统 ====================
 
     /**
-     * 把全应用**唯一**的一份配置写入系统（Settings.Global 供 Hook 端实时读取）+ 镜像文件 +
-     * boot 脚本 + 「停用绝对音量」开发者选项；回读解析后的模型与待保存模型做**语义比较**验证
-     * （排版与字段顺序无关，只有一串格式化 JSON 落盘）。
+     * 把全应用**唯一**的一份配置一次 root 往返下发到三个落点（[Shell.pushAll]：
+     * `Settings.Global` 主键 + 配置镜像 `printf '%s'`（无尾随换行）+ 条件写「停用绝对音量」），
+     * 再按幂等判据决定是否重写开机脚本；回读后与待保存模型各自归一成格式化 JSON 再比
+     * （见 [readBackMatches]，不参与序列化的字段与排版都不算差异）。
      *
-     * 应用侧不再有暂存副本，因此本方法是配置变更落盘的唯一途径；回读刻意用独立的
-     * root `settings get`（新进程无 SettingsProvider 缓存）而非 [ConfigStore.readEffectiveJson]。
+     * 落点缺失由 [PushMarks] 判定：**只有主键写入失败（[PushMarks.GLOBAL] 缺失）才算 [PushResult.putFailed]**，
+     * 界面提示不变；镜像 / 绝对音量开关缺失只记入模块日志并透出到 [PushResult.missingMarks]。
      *
-     * 全程为 root 阻塞调用，切到 [Dispatchers.IO] 执行。
+     * 幂等跳过（性能主线，实测 su 固定开销≈0、主成本在命令本身）：
+     *  - 绝对音量开关：App 进程用 [ConfigStore.readGlobalSetting]（无需 root）读现值，相同则不写该段；
+     *  - 开机脚本：`(active, steps)` 与 [ConfigStore.bootScriptRecord] 一致则跳过重写。
+     *
+     * 回读刻意用独立的 root `settings get`（新进程无 SettingsProvider 缓存），不与 [Shell.pushAll] 合并。
+     * 全程 root 阻塞，切到 [Dispatchers.IO] 执行。
      */
     suspend fun pushConfig(model: VolumeConfig): PushResult = withContext(Dispatchers.IO) {
+        val perf = store.perfLogEnabled
+        val t0 = if (perf) System.nanoTime() else 0L
         val pushJson = model.toJson()           // 全链路唯一形态：格式化串（Global / 镜像同源）
         val softwareMode = model.modeFor(OutputDevice.BT) == Prefs.BT_MODE_SOFTWARE
         val active = model.remapActive
-        val putResult = Shell.putGlobalConfig(Prefs.GLOBAL_KEY, pushJson)
-        Shell.writeGlobalMirror(pushJson)
-        Shell.writeBootScript(active, model.mediaSteps)
-        Shell.putGlobalConfig(Shell.SETTING_AV_DISABLE, if (active && softwareMode) "1" else "0")
-        var verified = false
-        if (putResult.isSuccess) {
-            verified = readBackMatches(Shell.getGlobalConfig(Prefs.GLOBAL_KEY).output, model)
+        val avTarget = if (active && softwareMode) "1" else "0"
+        val avValue = if (store.readGlobalSetting(Shell.SETTING_AV_DISABLE) == avTarget) null else avTarget
+        val expected = if (avValue != null) PushMarks.LANDING + PushMarks.AV else PushMarks.LANDING
+        val push = Shell.pushAll(Prefs.GLOBAL_KEY, pushJson, avValue)
+        val missing = PushMarks.missing(push.output, expected)
+        val putFailed = PushMarks.GLOBAL in missing
+        val steps = Prefs.clampMediaSteps(model.mediaSteps)
+        val record = store.bootScriptRecord()
+        val bootChanged = bootScriptShouldRewrite(active, steps, record)
+        if (!putFailed && bootChanged) {
+            Shell.writeBootScript(active, steps)
+            store.setBootScriptRecord(active, steps)
         }
-        Shell.appendSysLog("push config saved=$verified")
-        PushResult(verified = verified, savedConfig = model)
+        val verified = if (putFailed) {
+            false
+        } else {
+            readBackMatches(Shell.getGlobalConfig(Prefs.GLOBAL_KEY).output, model)
+        }
+        Shell.appendSysLog("push config saved=$verified putFailed=$putFailed missing=${missing.joinToString(",")}")
+        if (perf) {
+            val total = (System.nanoTime() - t0) / 1_000_000
+            Shell.appendSysLog(
+                "push perf total=${total}ms av=${if (avValue == null) "skip" else "write"}" +
+                    " boot=${if (!putFailed && bootChanged) "write" else "skip"}",
+            )
+        }
+        PushResult(
+            verified = verified, putFailed = putFailed, savedConfig = model, missingMarks = missing,
+        )
     }
 
     /**
@@ -165,7 +193,7 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
     suspend fun commit(plan: SavePlan.Confirm): CommitResult {
         val push = pushConfig(plan.pending)
         if (!push.verified) {
-            return CommitResult(savedConfig = null, followUp = FollowUp.Failed(Messages.pushFail))
+            return CommitResult(savedConfig = null, followUp = FollowUp.Failed(push.failMessage))
         }
         val followUp = when {
             plan.restartBt || plan.restartSystem -> FollowUp.AskRestart(plan.restartBt, plan.restartSystem)
@@ -186,6 +214,8 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
         withContext(Dispatchers.IO) {
             Shell.clearWrittenConfig()
             Shell.clearModuleLogs()
+            // 系统侧落点已抹掉：一并移除开机脚本幂等基线，否则清完改同样参数保存会漏写脚本。
+            store.clearBootScriptRecord()
         }
         return model
     }
@@ -219,10 +249,15 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
     ): SaveAndRestart {
         val push = pushConfig(model)
         if (!push.verified) {
-            return SaveAndRestart(pushFailed = true, savedConfig = null, bluetoothFailed = false)
+            return SaveAndRestart(
+                pushFailed = true, putFailed = push.putFailed, savedConfig = null, bluetoothFailed = false,
+            )
         }
         val outcome = restart(restartBt, restartSystem)
-        return SaveAndRestart(pushFailed = false, savedConfig = push.savedConfig, bluetoothFailed = outcome.bluetoothFailed)
+        return SaveAndRestart(
+            pushFailed = false, putFailed = false, savedConfig = push.savedConfig,
+            bluetoothFailed = outcome.bluetoothFailed,
+        )
     }
 
     // ==================== 文案辅助 ====================
@@ -255,6 +290,7 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
         val resolveDefaultMode: String get() = AppText.str(R.string.resolve_default_mode)
         val resolveDefaultSteps: String get() = AppText.str(R.string.resolve_default_steps)
         val pushFail: String get() = AppText.str(R.string.push_fail)
+        val pushVerifyFail: String get() = AppText.str(R.string.push_verify_fail)
         val autoSaveFail: String get() = AppText.str(R.string.auto_save_fail)
         val saveDone: String get() = AppText.str(R.string.save_done)
         val saveDoneTitle: String get() = AppText.str(R.string.save_done_title)
@@ -319,8 +355,25 @@ sealed interface SavePlan {
     ) : SavePlan
 }
 
-/** [SaveEngine.pushConfig] 的结果：[savedConfig] 无论成功与否都是本轮的比对基线模型。 */
-data class PushResult(val verified: Boolean, val savedConfig: VolumeConfig)
+/**
+ * [SaveEngine.pushConfig] 的结果：[savedConfig] 无论成功与否都是本轮的比对基线模型。
+ *
+ * [putFailed] 用来分流失败原因：true = 主键写入没成功（su 未授权 / 不可用）；
+ * false 而 [verified] 为 false = 写入命令成功、但系统回读的内容与待保存配置不一致。
+ * [missingMarks] 是本轮 [PushMarks] 未命中的落点标记（镜像 / 绝对音量开关等），
+ * 已记入模块日志，供排障时定位是哪个落点没写到。
+ */
+data class PushResult(
+    val verified: Boolean,
+    val putFailed: Boolean,
+    val savedConfig: VolumeConfig,
+    val missingMarks: List<String> = emptyList(),
+) {
+
+    /** 未生效时给用户的提示：两种原因措辞不同，不把校验不一致也推给 su。 */
+    val failMessage: String
+        get() = if (putFailed) SaveEngine.Messages.pushFail else SaveEngine.Messages.pushVerifyFail
+}
 
 /** [SaveEngine.commit] 成功后界面该做的下一步。 */
 sealed interface FollowUp {
@@ -343,6 +396,7 @@ data class RestartOutcome(val bluetoothFailed: Boolean)
 /** 「保存并重启」组合动作的结果：推送失败时不执行重启。 */
 data class SaveAndRestart(
     val pushFailed: Boolean,
+    val putFailed: Boolean,
     val savedConfig: VolumeConfig?,
     val bluetoothFailed: Boolean,
 )
@@ -350,13 +404,23 @@ data class SaveAndRestart(
 // ==================== 纯函数（供 JVM 单测直接断言） ====================
 
 /**
- * 写入后的回读校验：把 `settings get` 读回的原文解析成模型，与待保存模型做**语义比较**。
+ * 写入后的回读校验：把 `settings get` 读回的原文与待保存模型**各自归一成唯一的格式化 JSON 再比**，
+ * 判据就是「系统里真正落盘的内容」是否等于「打算落盘的内容」。
  *
- * 系统侧只有一份格式化串，但历史存量的紧凑串 / 用户手改的单行串都属于同一配置，
- * 排版差异不该被判成「写入失败」，因此不比串、只比解析后的模型。
+ * 刻意不比原文串——历史存量的紧凑串、用户手改的单行串都属于同一配置，排版差异不该判成写入失败；
+ * 也刻意不比模型对象——[VolumeConfig.equals] 覆盖模式A 范围，而它只对蓝牙持久化，外放 / 有线的
+ * `absolute` 根本不进 JSON，用默认回落值构造的模型回读后必然不相等（表现为写入成功却提示失败）。
+ * 两侧都经 [VolumeConfig.toJson] 归一，故排版与字段顺序都不参与差异。
  */
 internal fun readBackMatches(readBackRaw: String, pending: VolumeConfig): Boolean =
-    VolumeConfig.fromJson(readBackRaw) == pending
+    VolumeConfig.fromJson(readBackRaw)?.toJson() == pending.toJson()
+
+/**
+ * 开机脚本幂等判据（纯函数）：仅当本轮 `(active, steps)` 与上次烘进脚本的 [BootScriptRecord]
+ * 不同才需重写。**未记录**（`null`，旧存档 / 从未写过 / 刚清除数据）一律保守地必写。
+ */
+internal fun bootScriptShouldRewrite(active: Boolean, steps: Int, recorded: BootScriptRecord?): Boolean =
+    recorded == null || recorded.active != active || recorded.steps != steps
 
 /** 列出待保存配置相对已生效配置的改动（可读条目）；[base] 为 null 时返回空列表。 */
 internal fun describeChanges(base: VolumeConfig?, pending: VolumeConfig): List<String> {

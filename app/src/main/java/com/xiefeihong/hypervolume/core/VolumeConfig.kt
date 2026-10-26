@@ -269,8 +269,9 @@ class VolumeConfig(
         /** 默认配置：关闭直通 + 兜底档位数 + 三设备默认范围直通。 */
         val DEFAULT: VolumeConfig = VolumeConfig(
             false, Prefs.MEDIA_STEPS_DEFAULT, Prefs.KEY_STEP_DEFAULT,
-            DeviceConfig(Prefs.BT_MODE_DEFAULT, FALLBACK_RANGE, FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE),
-            DeviceConfig(Prefs.BT_MODE_DEFAULT, FALLBACK_RANGE, FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE),
+            // 外放 / 有线没有模式A 维度，置 null 与持久化口径一致；蓝牙必须给兜底范围供 Hook 直接用。
+            DeviceConfig(Prefs.BT_MODE_DEFAULT, null, FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE),
+            DeviceConfig(Prefs.BT_MODE_DEFAULT, null, FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE),
             DeviceConfig(Prefs.BT_MODE_DEFAULT, FALLBACK_RANGE, FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE),
         )
 
@@ -318,16 +319,22 @@ class VolumeConfig(
             root.has(KEY_ENABLED) || root.has(KEY_MEDIA_STEPS) ||
                 root.has(KEY_KEY_STEPS) || root.has(KEY_DEVICES)
 
+        /** 模式A 范围的读回初值：仅蓝牙有该维度，其余设备为 null（与写出侧同口径）。 */
+        private fun fallbackAbs(withAbsolute: Boolean): Range? =
+            if (withAbsolute) FALLBACK_RANGE else null
+
         /** 读取指定 name 的设备；缺失时给出默认（直通 + 兜底范围）。 */
         private fun readDevice(devices: JSONObject?, name: String, withAbsolute: Boolean): DeviceConfig {
             val el = devices?.optJSONObject(name) ?: return DeviceConfig(
-                Prefs.BT_MODE_DEFAULT, FALLBACK_RANGE, FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE,
+                Prefs.BT_MODE_DEFAULT, fallbackAbs(withAbsolute), FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE,
             )
             val mode = normalizeMode(intField(el, KEY_MODE, Prefs.BT_MODE_DEFAULT), withAbsolute)
+            // 模式A 只对蓝牙持久化：非蓝牙没有 "a" 键，读回必须与写出侧一样归一为 null，
+            // 否则这个不参与序列化的字段会让 equals 把两份等值配置判成不同（写入成功却校验失败）。
             val absolute = if (withAbsolute) {
                 readRange(el, KEY_ABSOLUTE, FALLBACK_RANGE, Prefs.AVRCP_MAX_VOLUME)
             } else {
-                FALLBACK_RANGE
+                null
             }
             val software = readRange(el, KEY_SOFTWARE, FALLBACK_RANGE, Prefs.MEDIA_STEPS_MAX)
             val defaultRange = readRange(el, KEY_DEFAULT, DEFAULT_FALLBACK_RANGE, Prefs.MEDIA_STEPS_MAX)

@@ -178,6 +178,22 @@ class BackupFormatTest {
     }
 
     @Test
+    fun bootAndPerfFactKeysRoundTripWithStrongTypes() {
+        // v1.1.5 新增的三个环境事实键（开机脚本 active/steps + 性能日志开关）属 Boolean/Int，
+        // 与 system_default_steps 同类，自动被 codec 强类型往返覆盖（不降级为字符串）。
+        val source = linkedMapOf<String, Any?>(
+            "boot_script_active" to true,
+            "boot_script_steps" to 45,
+            "perf_log" to false,
+        )
+        val content = BackupFormat.parse(BackupFormat.build(source, configJson, PACKAGE))
+        assertEquals(3, content.recordCount)
+        assertEquals(true, content.preferences["boot_script_active"])
+        assertEquals(45, content.preferences["boot_script_steps"])
+        assertEquals(false, content.preferences["perf_log"])
+    }
+
+    @Test
     fun codecWritesBackEachSupportedType() {
         val editor = FakeEditor()
         PreferenceCodec.putAll(

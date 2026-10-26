@@ -22,10 +22,12 @@ import kotlin.math.roundToInt
  * 生效配置做语义比较得出是否有未保存修改（见 [EditorState.hasUnsavedChanges]）；未保存的编辑
  * 不落盘，重进应用回到生效值。
  *
- * 另持有两个环境事实键：
+ * 另持有三个环境事实键：
  *  - [Prefs.KEY_SYSTEM_DEFAULT_STEPS]：首次探测到的**未被模块改写**的系统原生媒体档位数；
  *  - [Prefs.KEY_SYSTEM_DEFAULT_ACK]：用户在「拿不到系统默认档位」门控里主动选过处理方式，
- *    与是否已固化档位数解耦（旧实现同样分两个键，避免误把引擎表值当系统值固化）。
+ *    与是否已固化档位数解耦（旧实现同样分两个键，避免误把引擎表值当系统值固化）；
+ *  - [Prefs.KEY_BOOT_SCRIPT_ACTIVE] + [Prefs.KEY_BOOT_SCRIPT_STEPS]：上次烘进 post-fs-data
+ *    开机脚本的 `(生效标志, 档位数)`，作为幂等基线——本轮参数未变即跳过脚本重写（见 [SaveEngine.pushConfig]）。
  */
 class ConfigStore(context: Context) {
 
@@ -72,6 +74,56 @@ class ConfigStore(context: Context) {
             prefs.edit().putBoolean(Prefs.KEY_SYSTEM_DEFAULT_ACK, value).apply()
         }
 
+    // ==================== 开机脚本幂等基线 ====================
+
+    /**
+     * 上次烘进 post-fs-data 开机脚本的 `(生效标志, 档位数)`；任一键缺失（旧存档 / 从未写过 /
+     * 刚清除数据）返回 `null`，由 [SaveEngine.pushConfig] 按「未记录 → 必写」保守处理。
+     */
+    fun bootScriptRecord(): BootScriptRecord? {
+        if (!prefs.contains(Prefs.KEY_BOOT_SCRIPT_ACTIVE) || !prefs.contains(Prefs.KEY_BOOT_SCRIPT_STEPS)) {
+            return null
+        }
+        return BootScriptRecord(
+            active = prefs.getBoolean(Prefs.KEY_BOOT_SCRIPT_ACTIVE, false),
+            steps = prefs.getInt(Prefs.KEY_BOOT_SCRIPT_STEPS, 0),
+        )
+    }
+
+    /** 记录本轮烘进开机脚本的 `(active, steps)`（同步写：紧接着的再保存要用它判幂等）。 */
+    fun setBootScriptRecord(active: Boolean, steps: Int) {
+        prefs.edit()
+            .putBoolean(Prefs.KEY_BOOT_SCRIPT_ACTIVE, active)
+            .putInt(Prefs.KEY_BOOT_SCRIPT_STEPS, steps)
+            .commit()
+    }
+
+    /** 移除开机脚本幂等基线（「清除数据」成功后调用，否则清完改同样参数保存会漏写脚本）。 */
+    fun clearBootScriptRecord() {
+        prefs.edit()
+            .remove(Prefs.KEY_BOOT_SCRIPT_ACTIVE)
+            .remove(Prefs.KEY_BOOT_SCRIPT_STEPS)
+            .commit()
+    }
+
+    // ==================== 性能日志开关 ====================
+
+    /** 性能日志开关：开启时一次保存额外计一段耗时并写一条 `push perf` 模块日志（默认关）。 */
+    var perfLogEnabled: Boolean
+        get() = prefs.getBoolean(Prefs.KEY_PERF_LOG, false)
+        set(value) {
+            prefs.edit().putBoolean(Prefs.KEY_PERF_LOG, value).apply()
+        }
+
+    // ==================== 系统全局设置只读（无需 root） ====================
+
+    /**
+     * App 进程用 `ContentResolver` 读 `Settings.Global` 现值（读全局设置不需要 root），
+     * 供电量跳过绝对音量开关写入前的比对；键不存在或读取异常返回 `null`。
+     */
+    fun readGlobalSetting(key: String): String? =
+        runCatching { Settings.Global.getString(appContext.contentResolver, key) }.getOrNull()
+
     // ==================== 默认配置 ====================
 
     /**
@@ -82,20 +134,27 @@ class ConfigStore(context: Context) {
         val steps = Prefs.clampMediaSteps(systemDefaultSteps)
         return VolumeConfig(
             false, steps, Prefs.clampKeySteps(steps),
-            defaultDeviceConfig(), defaultDeviceConfig(), defaultDeviceConfig(),
+            defaultDeviceConfig(false), defaultDeviceConfig(false), defaultDeviceConfig(true),
         )
     }
 
     /**
-     * 一个默认设备配置：模式A 范围取 AVRCP 默认（可闻下限~127、对数曲线）；
+     * 一个默认设备配置：[withAbsolute]（仅蓝牙）时模式A 范围取 AVRCP 默认（可闻下限~127、对数曲线），
+     * 其余设备置 null——该维度不落盘，给值只会留下无法往返的内存状态；
      * 模式B/默认各持一套独立的中立起点，`max` 用 [Prefs.MEDIA_STEPS_MAX]（≥任何档位数）
      * → 初值恒为直通，用户拖动才会收窄。
      */
-    private fun defaultDeviceConfig(): DeviceConfig {
-        val absolute = Range(
-            defaultMinAbs(), Prefs.AVRCP_MAX_VOLUME,
-            defaultCurveType(VolumeMode.ABSOLUTE),
-        )
+    private fun defaultDeviceConfig(withAbsolute: Boolean): DeviceConfig {
+        // 与 VolumeConfig 的持久化口径对齐：模式A 范围只有蓝牙会写进 JSON，非蓝牙留 null，
+        // 这样「默认回落值」也能无损往返（写入后回读必然相等）。
+        val absolute = if (withAbsolute) {
+            Range(
+                defaultMinAbs(), Prefs.AVRCP_MAX_VOLUME,
+                defaultCurveType(VolumeMode.ABSOLUTE),
+            )
+        } else {
+            null
+        }
         val software = Range(0, Prefs.MEDIA_STEPS_MAX, defaultCurveType(VolumeMode.SOFTWARE))
         val default = Range(0, Prefs.MEDIA_STEPS_MAX, defaultCurveType(VolumeMode.SOFTWARE))
         return DeviceConfig(Prefs.BT_MODE_DEFAULT, absolute, software, default)
@@ -130,3 +189,9 @@ class ConfigStore(context: Context) {
         }
     }
 }
+
+/**
+ * 上次烘进 post-fs-data 开机脚本的参数基线（[ConfigStore.bootScriptRecord] 的返回）：
+ * [steps] 已经 [Prefs.clampMediaSteps]，与写入时的字面量口径一致。
+ */
+data class BootScriptRecord(val active: Boolean, val steps: Int)

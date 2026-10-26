@@ -41,7 +41,7 @@
    - 音量键步进即时生效。
 5. 想回到原生行为：把设备选 **默认** 模式，或到 **设置 → 通用** 关闭 **启用模块**（保存后按提示重启系统框架即完全停用，参数仍保留）；要抹掉本应用写入系统的配置、开机脚本与日志，用 **设置 → 备份与恢复 → 清除数据**。
 
-排查手段：首页顶栏右上角「刷新检测」与「运行状态」六行检测（模块是否加载、档位数是否生效、当前输出设备等）；**设置 → 故障排除 → 查看模块日志** 读取模块自写日志（支持复制/清理），同页还有「调试信息」（含 root / LSPosed / **默认档位** / 档位数来源 / 日志路径 / 那唯一一份生效配置原文）与「刷新检测」。
+排查手段：首页顶栏右上角「刷新检测」与「运行状态」六行检测（模块是否加载、档位数是否生效、当前输出设备等）；**设置 → 故障排除 → 查看模块日志** 读取模块自写日志（支持复制/清理），同页还有「调试信息」（含 root / LSPosed / **默认档位** / 档位数来源 / 日志路径 / **系统侧落点状态** / 那唯一一份生效配置原文，共 16 行）、「刷新检测」与可选的「性能日志」开关（开着时一次保存额外记一条 `push perf` 耗时）。
 
 ## 三种模式对比
 
@@ -107,7 +107,7 @@ app/src/main/java/com/xiefeihong/hypervolume/
 2. AudioService 构造器开始前改写静态 `MAX_STREAM_VOLUME` 数组；
 3. `createStreamStates` 前再改写一次（ROM 可能在构造器中途按属性重新赋值）；
 4. 构造完成后、开机延迟校正（2/5/15/30/60s）、`getStreamMaxVolume` 自愈三处校验实例 `mIndexMax`，不一致立即校正；
-5. App 保存时以 root 写入 post-fs-data 开机脚本，system_server 启动前直接 `setprop` 真实属性（不依赖任何 Hook）。
+5. App 保存时以 root 写入 post-fs-data 开机脚本，system_server 启动前直接 `resetprop` 真实属性（不依赖任何 Hook）。
 
 对 AudioService 构造器与 `createStreamStates` 执行 `deoptimize`，防止调用点被内联后绕过属性拦截。
 
@@ -137,7 +137,10 @@ app/src/main/java/com/xiefeihong/hypervolume/
 
 全链路只有一种写出形态，由同一个手写写出器产出（`org.json` 在 JVM 上按 `HashMap` 迭代、键序不稳定，故不用它写出）：
 
-- **缩进两空格**：`Settings.Global`、配置镜像与备份里存的都是这一串，便于 `cat` / `settings get` 直接阅读；键序固定，但**内容一致性靠解析后的模型做语义比较**（排版不参与「有无未保存修改」的判定）。
+- **缩进两空格**：`Settings.Global`、配置镜像与备份里存的都是这一串，便于 `cat` / `settings get` 直接阅读；键序固定。
+- **两处一致性判定口径不同**：「有无未保存修改」比**解析后的模型**（排版不参与）；写入后的**回读校验比归一后的格式化串**（
+  两侧都再过一遍写出器，只比真正落盘的内容）。后者不能比模型：模式A 范围只对蓝牙持久化，外放 / 有线的该字段
+  不进 JSON，系统侧没有配置时回落的默认值就带着这个不落盘的值，按模型相等去判会让「写入成功」被误报成失败。
 
 历史存量的紧凑单行串（旧版暂存键 / 旧存档）无需迁移：`JSONObject` 的解析天然容忍空白与换行。
 
@@ -146,13 +149,13 @@ app/src/main/java/com/xiefeihong/hypervolume/
 | 通道 | 位置 | 用途 |
 |---|---|---|
 | **唯一一份配置** | `Settings.Global["volume_steps_hook_config"]`（格式化 JSON） | Hook 端实时读取（`registerContentObserver` 监听变更即时失效缓存）；App 端经 `ContentResolver` 直读它装载界面（读取不设权限，写入需 root） |
-| 镜像兜底 | `/data/system/hypervolume_config` | 冷启动早期 SettingsProvider 未就绪时直读（内容与主通道一致；读入时限 8 KB，格式化串实测约 1.1 KB） |
-| 开机脚本 | `/data/adb/post-fs-data.d/hypervolume.sh` | Magisk / KernelSU 最早阶段 `setprop ro.config.media_vol_steps` |
+| 镜像兜底 | `/data/system/hypervolume_config` | 冷启动早期 SettingsProvider 未就绪时直读（内容与主通道一致；v1.1.5 起以 `printf '%s'` 写出、**无尾随换行**，与主通道逐字节一致；读入时限 8 KB，格式化串实测约 1.1 KB） |
+| 开机脚本 | `/data/adb/post-fs-data.d/hypervolume.sh` | Magisk / KernelSU 最早阶段 `resetprop ro.config.media_vol_steps`；v1.1.5 起仅在 `(生效标志, 档位数)` 变化时重写（幂等） |
 | 开发者选项 | `Settings.Global["bluetooth_disable_absolute_volume"]` | 模式B 时置 `1` |
 | 模块日志 | `/data/system/hypervolume_sys.log`、`/data/data/com.android.bluetooth/files/hypervolume_bt.log` | App 内「查看模块日志」读取 |
 
 
-应用侧不再有配置副本：`SharedPreferences("settings")` 只留 `system_default_steps` 等环境事实与语言/颜色等界面偏好；界面编辑只存在于内存，重进应用回到生效配置。升级安装残留的旧键 `config_json` 不再读写，导出时也会被丢弃。
+应用侧不再有配置副本：`SharedPreferences("settings")` 只留 `system_default_steps`、`boot_script_active` / `boot_script_steps`（开机脚本幂等基线）等环境事实与语言/颜色等界面偏好；界面编辑只存在于内存，重进应用回到生效配置。升级安装残留的旧键 `config_json` 不再读写，导出时也会被丢弃。
 
 `mode`：`0=默认（直通）` / `1=绝对音量`（仅蓝牙，其他设备归一为 2） / `2=相对音量`；`curve`：`0=对数` / `1=线性` / `2=平方根`；`a/b/d` 分别为绝对音量 / 相对音量 / 默认三套范围（`a` 仅蓝牙写）。
 
@@ -160,6 +163,40 @@ app/src/main/java/com/xiefeihong/hypervolume/
 `module`（设置 → 通用「启用模块」）为模块级总闸，`false` 时不重写档位数、不接管音量键、不改 AVRCP 曲线、不做软件衰减；`enabled`（主页「启用档位修改」）只管档位与范围映射。
 
 模块元数据（`META-INF/xposed/java_init.list`、`module.prop`、`scope.list`）由 `yukihook-compiler` 依据 `HookEntry` 上的注解在编译期生成，源码目录中不手动声明。
+
+## 保存链路与 Hook 读配置开销（v1.1.5）
+
+v1.1.5 不改变任何对外行为，只压缩「一次保存的 root 往返数」与「Hook 热路径读配置的开销」，并加固写入面。
+
+**实测基线（Redmi `23077RABDC` / HyperOS + KernelSU，adb-su 命令净耗时，各取多次中位）**：su 守护进程往返的
+固定开销≈ 0（`su -c true` 与 `adb shell true` 相当，App 用 `ProcessBuilder` 直连不付 adb 传输），一次保存的耗时
+主要在命令本身——`settings put global` ~60–80ms（走 SettingsProvider binder）、镜像写 ~15ms、开机脚本写 ~90ms、
+`resetprop` ~30ms、`settings get` ~37ms。故**幂等跳过是最大杠杆**：稳态一次保存（参数与绝对音量均未变）从 ~250–300ms
+降到 ~135ms。
+
+- **保存链路 6 次 su → 2 次**：`Settings.Global` 主键 + 配置镜像 + 「停用绝对音量」开关 + 日志追加合并为一条
+  `Shell.pushAll`（前置 `V=<quote(json)>` 让主键与镜像复用同一变量、避免多行 JSON 二次转义；每段成功回显
+  `hv_ok:*` 落点标记、末尾显式 `exit 0`，失败位置由**缺失的标记**判定，顺带修掉「`settings put` 写空值也返回 rc=0」
+  的误判；只有主键标记缺失才算写入失败）。回读仍单独一次 root `settings get`（新进程绕开 SettingsProvider 缓存）。
+- **开机脚本幂等**：脚本只由 `(生效标志, 档位数)` 决定，写入前与 `boot_script_active`/`boot_script_steps` 事实键比对，
+  未变即跳过重写；「清除数据」成功后移除这两键（否则清完改同样参数保存会漏写脚本）。脚本写出改逐行走 `quote()`
+  （旧实现裸 `'…'` 包裹，某行含单引号即破腔——注入面），并把「写脚本」与「立即对齐 `resetprop`」并入同一次 su。
+- **绝对音量幂等**：App 进程用 `ContentResolver` 读现值（读全局设置不需要 root），仅目标值不同才写入该段。
+- **探测合并**：主页刷新检测的 root 可用性 + LSPosed 目录两次 su 合成一次 `Shell.rootAndLsposed()`，调试信息复用
+  同一探测结果，不再重复 su。
+- **落点状态可见**：`pushAll` 后未命中标记记入模块日志；调试信息新增一行「系统侧落点状态」（共 **16 行**，
+  root 可用时探测全局设置 / 配置镜像两个落点，缺失项直接列出），保存成功但镜像缺失时在此可见。
+- **可开关性能日志**：「设置 → 故障排除 → 性能日志」开关（`perf_log`，默认关），开着时一次保存额外发 1 次 su
+  写一条 `push perf` 耗时日志（实测模式，可接受）。
+
+**Hook 侧读配置**：`readConfig` 的 TTL 800ms 缓存 + `ContentObserver` 即时失效不变，另加两档保护——
+
+- **负面退避**：双通道（Settings.Global + 镜像文件）都读不到时记下失败时刻，`CONFIG_MISS_BACKOFF_MS = 5s` 内快路径
+  直接返回 `null`，避免系统侧无配置时音量键 / `VolumeStreamState` / AVRCP 转换这些高频热路径每次都走 binder IPC +
+  文件 `stat`/`open`。代价是「系统侧无配置」状态下新写入的配置最多延迟 5s 生效（下一次退避到期即命中并注册观察器）。
+- **single-flight**：缓存过期时仅首个线程走慢路径，其余沿用旧缓存（含 `null`），杜绝并发 binder 风暴。
+- **镜像短读**：`readMirrorConfig` 拷贝循环按剩余长度续读、真 EOF（`read<0`）才停，用 `String(buffer, 0, n, UTF_8)`
+  精确构造，不再用 0x00 填充后靠 `trim()` 兜。
 
 ## 备份与恢复
 
@@ -234,24 +271,30 @@ keytool -genkeypair -v -keystore release.keystore -storetype PKCS12 \
 
 ## 测试
 
-JVM 单元测试覆盖与界面无关的核心算法，共 **12 个测试类 / 101 个用例**（`failures=0 errors=0`）：
+JVM 单元测试覆盖与界面无关的核心算法，共 **14 个测试类 / 121 个用例**（`failures=0 errors=0`）：
 
 | 测试类 | 覆盖内容 |
 |---|---|
 | `PrefsTest` | 档位/键步 clamp、`keyDelta`、网格吸附 `nextKeyStepUp/Down` 的严格单调性与边界 |
-| `VolumeConfigTest` | JSON 往返序列化、格式化串键序锁定、排版无关的语义相等、非法/缺失字段回落、手工编辑（`1/0`、字符串数字）容忍、模块总闸 `engaged` 判据与缺 `module` 键按启用解析 |
+| `VolumeConfigTest` | JSON 往返序列化、格式化串键序锁定、排版无关的语义相等、非法/缺失字段回落、手工编辑（`1/0`、字符串数字）容忍、模块总闸 `engaged` 判据与缺 `module` 键按启用解析、非蓝牙设备无模式A 维度（读回归一为 `null`、默认回落值可无损往返）、**属性化往返恒等**（3 模式×3 设备全组合逐组 `fromJson(toJson())==self` + 非蓝牙脏 absolute 归一到同一典范对象） |
 | `AvrcpTest` | AVRCP 0~127 映射、曲线标签、预览与映射表文本生成 |
 | `EditorStateTest` | 编辑态派生（目标物理档位、未保存判定按配置语义比较）、以生效配置装载与无配置时回落默认 |
 | `PreviewBuilderTest` | 曲线点列与映射表构建 |
-| `SavePlanTest` | 保存计划：门控三选项、改动清单（含「启用模块」条目）、重启判定（系统框架 / 蓝牙） |
+| `SavePlanTest` | 保存计划：门控三选项、改动清单（含「启用模块」条目）、重启判定（系统框架 / 蓝牙）、回读校验只比落盘内容（不参与序列化的字段不算差异）、开机脚本幂等判据 `bootScriptShouldRewrite`（未记录保守必写、参数变化才重写） |
 | `StatusLinesTest` | 运行状态各行文本生成 |
-| `BackupFormatTest` | 备份存档往返与类型还原、`global` 导出为嵌套对象 / 导入回串、遗留 `config_json` 两端过滤、v1/v2 存档兼容、非法存档拒绝 |
-| `DebugInfoLinesTest` | 调试信息各段文本生成（只含生效配置一段原文） |
+| `BackupFormatTest` | 备份存档往返与类型还原、`global` 导出为嵌套对象 / 导入回串、遗留 `config_json` 两端过滤、v1/v2 存档兼容、非法存档拒绝、新增环境事实键（boot active/steps + perf_log）强类型往返 |
+| `ShellPushCommandTest` | `pushAll` 命令拼装快照（`V=` 变量复用 + `printf '%s'` + `exit 0` + `hv_ok:*` 标记顺序 / av 为 null 时省略）、开机脚本逐行 `quote`（注入面）、`PushMarks.missing` 解析、`RootProbe` 合并探测输出解析 |
+| `ConfigReadPathTest` | Hook 读配置分支判定 `decideConfigReadPath`（假时钟）：缓存命中 / 负面退避跳过 / 退避到期重走慢路径 / TTL<=0 不走缓存 |
+| `DebugInfoLinesTest` | 调试信息各段文本生成（共 16 行，新增「系统侧落点状态」行：全部命中 / 列出缺失 / 无 root 标注需授权） |
 | `EffectiveConfigParseTest` | 生效配置原文 → 模型的脏值归一（空串 / 字面 `null` / 畸形 / 非本模块键返回 `null`，排版不参与语义） |
 | `UpdateCheckerTest` | 版本比较与更新渠道解析 |
 | `StringResourcesTest` | 中英双语资源键集对齐、插参一致性、`\n` 必须为转义而非物理换行 |
 
 界面与应用侧逻辑已在模拟器（Pixel 3a / API 34）实机验收：状态检测区、开关与禁用态滑条、设备选项卡切换、**有线耳机/外放不再显示「绝对音量」选项**（仅蓝牙列出）、等宽预览摘要与映射表、曲线图双口径切换与轴标签刷新、日志/提示/保存确认弹框、保存失败 Toast、未保存提示行、使用说明；主页顶栏右上角「刷新检测」、主页副标题精简；设置页三区块同页堆叠（无顶部标签）、「启用模块」总闸位于「通用」首行、「清除数据」位于「备份与恢复」末行（其后为备份范围说明）、「故障排除」不再含恢复默认入口；蓝牙未连接时运行状态只写「蓝牙音频设备：未连接」；调试信息新增「默认档位」行且与主页档位行的默认值一致；`Settings.Global` 与配置镜像同为一份格式化 JSON（含 `module` 键），界面直接装载它——**无 root 也能读到生效配置**（`ContentResolver` 直读）；未保存的编辑只存在于内存，杀进程重进回到生效值，偏好文件 `settings.xml` 里不再出现 `config_json` 键；调试信息只剩生效配置一段原文；导出存档里配置只出现在 `global`（嵌套对象），导入需要 root、无 root 时整份中止；仅改动排版（把格式化串挤成单行）不再被误判为「有未保存修改」。
+
+真机（Redmi 23077RABDC / HyperOS + KernelSU + LSPosed）另验收一处回归：系统侧没有生效配置时（清空数据后）首次点「保存修改」，
+v1.1.2 起会提示「写入系统配置失败，请确认 su 已授权」——实际配置已落盘（`Settings.Global` 与镜像逐字节一致、开机脚本已写出），
+只是回读校验按模型相等误判（非蓝牙的模式A 范围不落盘）；改回归一后的格式化串后，同一场景直接给出重启生效提示，不再误报。
 
 > **Hook 运行时行为尚未在真机验证**：模拟器无 HyperOS 环境、无真实音频与蓝牙硬件。`AudioHooks` / `BtHooks` 的实际效果与 root 保存/重启流程需在真机启用模块后确认。
 

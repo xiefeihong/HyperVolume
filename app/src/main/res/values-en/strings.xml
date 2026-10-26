@@ -114,6 +114,7 @@
     <string name="resolve_default_mode">Use default mode</string>
     <string name="resolve_default_steps">Use default step count</string>
     <string name="push_fail">Failed to write the system configuration; make sure su is granted</string>
+    <string name="push_verify_fail">The configuration was written, but the read-back does not match what was saved. Retry; if it persists, check the debug info.</string>
     <string name="auto_save_fail">Auto-save failed: the system configuration could not be written, make sure su is granted</string>
     <string name="save_done">Saved; no restart required.</string>
     <string name="save_done_title">Saved</string>
@@ -265,6 +266,13 @@
     <string name="debug_config_title">Active configuration (Settings.Global)</string>
     <string name="debug_no_config">No configuration recorded yet</string>
     <string name="debug_log_paths">Log paths: %1$s</string>
+    <string name="debug_landing">System landing status: %1$s</string>
+    <string name="debug_landing_ok">All present</string>
+    <string name="landing_no_root">Requires Root</string>
+    <string name="landing_global">Global settings</string>
+    <string name="landing_mirror">Config mirror</string>
+    <string name="perf_log_title">Performance log</string>
+    <string name="perf_log_summary">Record an extra timing log on every save (for troubleshooting; adds one root call)</string>
 
     <!-- ==================== 关于页 ==================== -->
     <string name="about_title">About</string>

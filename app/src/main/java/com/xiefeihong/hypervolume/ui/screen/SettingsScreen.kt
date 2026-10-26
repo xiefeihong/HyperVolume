@@ -40,7 +40,7 @@ fun SettingsScreen(state: UiState, vm: HyperVolumeViewModel) {
     PageColumn {
         GeneralSection(state = state, vm = vm)
         BackupSection(state = state, vm = vm)
-        TroubleshootSection(vm = vm)
+        TroubleshootSection(state = state, vm = vm)
     }
 }
 
@@ -133,8 +133,15 @@ private fun BackupSection(state: UiState, vm: HyperVolumeViewModel) {
  * 其中的「清除数据」环节保留下来，改放到「备份与恢复」区块。
  */
 @Composable
-private fun TroubleshootSection(vm: HyperVolumeViewModel) {
+private fun TroubleshootSection(state: UiState, vm: HyperVolumeViewModel) {
     SectionCard(title = stringResource(R.string.tab_troubleshoot)) {
+        SwitchPreference(
+            checked = state.perfLog,
+            onCheckedChange = vm::onTogglePerfLog,
+            title = stringResource(R.string.perf_log_title),
+            summary = stringResource(R.string.perf_log_summary),
+        )
+        SectionDivider()
         ArrowPreference(
             title = stringResource(R.string.debug_info),
             summary = stringResource(R.string.debug_info_summary),
