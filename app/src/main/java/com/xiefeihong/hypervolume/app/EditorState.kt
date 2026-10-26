@@ -28,8 +28,8 @@ enum class NativeAxis { STEPS, PERCENT }
 data class EditorState(
     /** 权威配置模型：编辑即时写入此处，持久化与推送都以此为准。 */
     val model: VolumeConfig,
-    /** 上一次成功写入系统（Settings.Global）的生效配置 JSON，作为「未保存修改」比较基线。 */
-    val lastSavedJson: String = "",
+    /** 上一次成功写入系统（Settings.Global）的生效配置，作为「未保存修改」的语义比较基线。 */
+    val lastSaved: VolumeConfig? = null,
     /** 当前编辑的设备维度（对应顶部选项卡）。 */
     val editingDevice: OutputDevice = OutputDevice.SPEAKER,
     /** 当前滑条/曲线所代表的模式（ABSOLUTE 编辑 absolute 范围，SOFTWARE 编辑 software/默认范围）。 */
@@ -79,8 +79,8 @@ data class EditorState(
     /** 模式A 是否对当前设备可用（仅蓝牙）。 */
     val absoluteAllowed: Boolean get() = editingDevice.supportsAbsolute()
 
-    /** 当前模型与已生效基线不一致（存在未保存修改）。 */
-    val hasUnsavedChanges: Boolean get() = model.toJson() != lastSavedJson
+    /** 当前模型与已生效基线不一致（存在未保存修改）：按配置语义比较，排版与字段顺序无关。 */
+    val hasUnsavedChanges: Boolean get() = model != lastSaved
 
     /**
      * 生效后的物理档位数：模块实际介入时=用户 [mediaSteps]，否则=系统默认；
@@ -171,8 +171,8 @@ data class EditorState(
     /** 切换默认预览横轴口径（仅默认设备可见）。 */
     fun changeNativeAxis(axis: NativeAxis): EditorState = copy(nativeAxis = axis)
 
-    /** 标记本轮改动已成功写入系统（刷新「未保存修改」基线）。 */
-    fun markSaved(json: String): EditorState = copy(lastSavedJson = json)
+    /** 标记本轮改动已成功写入系统（刷新「未保存修改」基线）；传 `null` 表示尚无生效基线。 */
+    fun markSaved(config: VolumeConfig?): EditorState = copy(lastSaved = config)
 
     /** 采纳/重置整份配置后重载界面（等价旧 `applyConfigToPrefs` + `loadConfigIntoUi(false)`）。 */
     fun replaceModel(cfg: VolumeConfig): EditorState =
@@ -253,7 +253,7 @@ data class EditorState(
             systemDefaultSteps: Int,
             detectedDevice: OutputDevice?,
             keepDevice: OutputDevice = OutputDevice.SPEAKER,
-            lastSavedJson: String = "",
+            lastSaved: VolumeConfig? = null,
         ): EditorState {
             val cfg = store.loadModel() ?: store.defaultConfig(systemDefaultSteps)
             val enabled = cfg.enabled
@@ -262,7 +262,7 @@ data class EditorState(
             val stepped = stepsWithFloor(media, key)
             val base = EditorState(
                 model = cfg,
-                lastSavedJson = lastSavedJson,
+                lastSaved = lastSaved,
                 editingDevice = detectedDevice ?: keepDevice,
                 enabled = enabled,
                 mediaSteps = stepped.first,

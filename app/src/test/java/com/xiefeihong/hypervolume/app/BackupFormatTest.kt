@@ -62,6 +62,9 @@ class BackupFormatTest {
 
         assertEquals(source.size, content.recordCount)
         assertTrue("配置值应可还原为等价模型", sameConfig(configJson, content.preferences["config_json"] as String))
+        // 存档里的嵌套对象回读后归一为全链路唯一的格式化串（不退化成无缩进单行）
+        assertEquals(configJson, content.preferences["config_json"])
+        assertEquals(configJson, content.effectiveJson)
         assertEquals("en", content.preferences["ui_language"])
         assertEquals(15, content.preferences["system_default_steps"])
         assertEquals(1_730_000_000_000L, content.preferences["system_default_ack_at"])

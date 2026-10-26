@@ -44,7 +44,7 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
      */
     fun planSave(state: EditorState): SavePlan {
         val pending = state.model
-        val base = VolumeConfig.fromJson(state.lastSavedJson)
+        val base = state.lastSaved
         val blocked = !pending.enabled && pending.anyDeviceNonDefault() &&
             store.capturedSystemDefaultSteps() == null && !store.systemDefaultAcknowledged
         return if (blocked) {
@@ -90,14 +90,14 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
             if (blocked.trustedRealSteps) store.captureSystemDefaultSteps(blocked.steps)
             store.systemDefaultAcknowledged = true
         }
-        return confirmPlan(state, pending, VolumeConfig.fromJson(state.lastSavedJson))
+        return confirmPlan(state, pending, state.lastSaved)
     }
 
     /** 常规确认计划（旧 `proceedSave`）：与已生效基线比对列出改动，并算出需重启哪些组件。 */
     private fun confirmPlan(
         state: EditorState, pending: VolumeConfig, base: VolumeConfig?,
     ): SavePlan {
-        if (base != null && base.toJson() == pending.toJson()) {
+        if (base != null && base == pending) {
             return SavePlan.Nothing(Messages.saveNone)
         }
         val changes = describeChanges(base, pending)
@@ -134,14 +134,14 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
 
     /**
      * 把配置写入系统（Settings.Global 供 Hook 端实时读取）+ 镜像文件 + boot 脚本 +
-     * 「停用绝对音量」开发者选项，并回读解析后与紧凑 JSON 比对验证（与排版无关）。
+     * 「停用绝对音量」开发者选项；回读解析后的模型与待保存模型做**语义比较**验证
+     * （排版与字段顺序无关，只有一串格式化 JSON 落盘）。
      *
      * 全程为 root 阻塞调用，切到 [Dispatchers.IO] 执行。
      */
     suspend fun pushConfig(model: VolumeConfig): PushResult = withContext(Dispatchers.IO) {
         store.persist(model)
-        val configJson = model.toJson()          // 紧凑：暂存与差异比对基线
-        val pushJson = model.toPrettyJson()      // 格式化：写入 Settings.Global 与镜像，便于查看
+        val pushJson = model.toJson()           // 全链路唯一形态：格式化串（暂存 / Global / 镜像同源）
         val softwareMode = model.modeFor(OutputDevice.BT) == Prefs.BT_MODE_SOFTWARE
         val active = model.remapActive
         val putResult = Shell.putGlobalConfig(Prefs.GLOBAL_KEY, pushJson)
@@ -150,11 +150,10 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
         Shell.putGlobalConfig(Shell.SETTING_AV_DISABLE, if (active && softwareMode) "1" else "0")
         var verified = false
         if (putResult.isSuccess) {
-            val readBack = VolumeConfig.fromJson(Shell.getGlobalConfig(Prefs.GLOBAL_KEY).output)
-            verified = readBack != null && readBack.toJson() == configJson
+            verified = readBackMatches(Shell.getGlobalConfig(Prefs.GLOBAL_KEY).output, model)
         }
         Shell.appendSysLog("push config saved=$verified")
-        PushResult(verified = verified, configJson = configJson)
+        PushResult(verified = verified, savedConfig = model)
     }
 
     /**
@@ -164,30 +163,29 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
     suspend fun commit(plan: SavePlan.Confirm): CommitResult {
         val push = pushConfig(plan.pending)
         if (!push.verified) {
-            return CommitResult(savedJson = null, followUp = FollowUp.Failed(Messages.pushFail))
+            return CommitResult(savedConfig = null, followUp = FollowUp.Failed(Messages.pushFail))
         }
         val followUp = when {
             plan.restartBt || plan.restartSystem -> FollowUp.AskRestart(plan.restartBt, plan.restartSystem)
             else -> FollowUp.Done
         }
-        return CommitResult(savedJson = push.configJson, followUp = followUp)
+        return CommitResult(savedConfig = push.savedConfig, followUp = followUp)
     }
 
     /**
      * 清除此应用写入的系统侧数据：配置（Settings.Global 键 / 镜像 / boot 脚本 / 被改写的
-     * ro 属性）与模块日志。返回新的「已生效基线」JSON（= 当前模型，此后不再提示未保存修改）。
+     * ro 属性）与模块日志。返回新的「已生效基线」模型（= 当前模型，此后不再提示未保存修改）。
      *
      * 由「设置 → 备份与恢复 → 清除数据」直接调用（不再附属于某个保存流程）。
      * 刻意**保留**本地 SharedPreferences：其中的原生档位数等属设备环境事实，且清除后框架
      * 未重启时 `getStreamMaxVolume` 仍返回刚退下的旧覆盖值，一并抹掉会导致重启前把它重新误固化。
      */
-    suspend fun clearAppData(model: VolumeConfig): String {
-        val baseline = model.toJson()
+    suspend fun clearAppData(model: VolumeConfig): VolumeConfig {
         withContext(Dispatchers.IO) {
             Shell.clearWrittenConfig()
             Shell.clearModuleLogs()
         }
-        return baseline
+        return model
     }
 
     /** 按需重启蓝牙与/或系统框架（不重复写配置，配置已在保存时推送）。 */
@@ -219,10 +217,10 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
     ): SaveAndRestart {
         val push = pushConfig(model)
         if (!push.verified) {
-            return SaveAndRestart(pushFailed = true, savedJson = "", bluetoothFailed = false)
+            return SaveAndRestart(pushFailed = true, savedConfig = null, bluetoothFailed = false)
         }
         val outcome = restart(restartBt, restartSystem)
-        return SaveAndRestart(pushFailed = false, savedJson = push.configJson, bluetoothFailed = outcome.bluetoothFailed)
+        return SaveAndRestart(pushFailed = false, savedConfig = push.savedConfig, bluetoothFailed = outcome.bluetoothFailed)
     }
 
     // ==================== 文案辅助 ====================
@@ -319,8 +317,8 @@ sealed interface SavePlan {
     ) : SavePlan
 }
 
-/** [SaveEngine.pushConfig] 的结果：[configJson] 无论成功与否都是本轮比对基线。 */
-data class PushResult(val verified: Boolean, val configJson: String)
+/** [SaveEngine.pushConfig] 的结果：[savedConfig] 无论成功与否都是本轮的比对基线模型。 */
+data class PushResult(val verified: Boolean, val savedConfig: VolumeConfig)
 
 /** [SaveEngine.commit] 成功后界面该做的下一步。 */
 sealed interface FollowUp {
@@ -335,7 +333,7 @@ sealed interface FollowUp {
     data object Done : FollowUp
 }
 
-data class CommitResult(val savedJson: String?, val followUp: FollowUp)
+data class CommitResult(val savedConfig: VolumeConfig?, val followUp: FollowUp)
 
 /** [SaveEngine.restart] 的结果。 */
 data class RestartOutcome(val bluetoothFailed: Boolean)
@@ -343,11 +341,20 @@ data class RestartOutcome(val bluetoothFailed: Boolean)
 /** 「保存并重启」组合动作的结果：推送失败时不执行重启。 */
 data class SaveAndRestart(
     val pushFailed: Boolean,
-    val savedJson: String,
+    val savedConfig: VolumeConfig?,
     val bluetoothFailed: Boolean,
 )
 
 // ==================== 纯函数（供 JVM 单测直接断言） ====================
+
+/**
+ * 写入后的回读校验：把 `settings get` 读回的原文解析成模型，与待保存模型做**语义比较**。
+ *
+ * 系统侧只有一份格式化串，但历史存量的紧凑串 / 用户手改的单行串都属于同一配置，
+ * 排版差异不该被判成「写入失败」，因此不比串、只比解析后的模型。
+ */
+internal fun readBackMatches(readBackRaw: String, pending: VolumeConfig): Boolean =
+    VolumeConfig.fromJson(readBackRaw) == pending
 
 /** 列出待保存配置相对已生效配置的改动（可读条目）；[base] 为 null 时返回空列表。 */
 internal fun describeChanges(base: VolumeConfig?, pending: VolumeConfig): List<String> {

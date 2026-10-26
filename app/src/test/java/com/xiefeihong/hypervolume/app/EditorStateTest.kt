@@ -44,7 +44,7 @@ class EditorStateTest {
         systemDefaultSteps: Int = 15,
     ): EditorState = EditorState(
         model = cfg,
-        lastSavedJson = cfg.toJson(),
+        lastSaved = cfg,
         editingDevice = editingDevice,
         systemDefaultSteps = systemDefaultSteps,
     ).replaceModel(cfg)
@@ -187,7 +187,18 @@ class EditorStateTest {
         assertFalse(s.hasUnsavedChanges)
         val changed = s.changeMediaSteps(80)
         assertTrue(changed.hasUnsavedChanges)
-        assertFalse(changed.markSaved(changed.model.toJson()).hasUnsavedChanges)
+        assertFalse(changed.markSaved(changed.model).hasUnsavedChanges)
+    }
+
+    @Test
+    fun unsavedBaseline_comparesSemanticsNotLayout() {
+        val cfg = config()
+        // 基线取自排版不同的等价串（旧版暂存的紧凑串 / 手写单行）：语义相同就不提示未保存
+        val singleLine = cfg.toJson().replace("\n", "").replace(", ", ",").replace(": ", ":")
+        val againstSingleLine = loaded().copy(lastSaved = VolumeConfig.fromJson(singleLine))
+        assertFalse(againstSingleLine.hasUnsavedChanges)
+        // 尚无生效基线（首次启动 / 回写失败）如实提示有未保存修改
+        assertTrue(loaded().copy(lastSaved = null).hasUnsavedChanges)
     }
 
     @Test

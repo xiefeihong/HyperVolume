@@ -15,10 +15,10 @@ import kotlin.math.roundToInt
 /**
  * 应用侧配置仓（移植自旧 `MainActivity`/`ConfigEditor` 的 SharedPreferences 读写职责）。
  *
- * 界面上的所有编辑先落到内存 [VolumeConfig]，整体以 `toJson()` 暂存于**单一**偏好键
- * [Prefs.KEY_CONFIG_JSON]；只有「保存修改」才会推送到系统（见 [SaveEngine]）。因此这里
- * 只是「编辑暂存区」，不代表系统生效值——生效基线由 [VolumeConfig.toJson] 与
- * 上次成功写入的 JSON 比对得出（见 [EditorState.hasUnsavedChanges]）。
+ * 界面上的所有编辑先落到内存 [VolumeConfig]，整体以 `toJson()`（全链路唯一的格式化串）暂存于
+ * **单一**偏好键 [Prefs.KEY_CONFIG_JSON]；只有「保存修改」才会推送到系统（见 [SaveEngine]）。
+ * 因此这里只是「编辑暂存区」，不代表系统生效值——生效基线是上次成功写入系统的配置模型，
+ * 与当前模型做语义比较得出是否有未保存修改（见 [EditorState.hasUnsavedChanges]）。
  *
  * 另持有两个环境事实键：
  *  - [Prefs.KEY_SYSTEM_DEFAULT_STEPS]：首次探测到的**未被模块改写**的系统原生媒体档位数；

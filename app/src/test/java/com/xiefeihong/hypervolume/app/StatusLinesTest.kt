@@ -74,7 +74,7 @@ class StatusLinesTest : TextBackedTest() {
     @Test
     fun bluetoothLineJoinsDevicesOrReportsNone() {
         assertEquals(
-            "蓝牙音频设备：未连接（连接耳机后可回来看映射预览）",
+            "蓝牙音频设备：未连接",
             statusBluetoothText(emptyList()),
         )
         assertEquals(

@@ -12,8 +12,12 @@ import org.json.JSONObject
  *
  * **只认 JSON**：不提供任何历史格式的解析分支，[fromJson] 解析失败或字段缺失一律回落到默认值。
  *
- * 写出用 [JsonBuilder]（手写、键序固定、零依赖，紧凑串可直接用作差异比对基线），
- * 读入用框架自带的 [JSONObject]（system_server / 蓝牙进程均可用，无需引入第三方 JSON）。
+ * **只有一种写出形态**：[toJson] 输出缩进两空格的格式化串，暂存键、`Settings.Global`、镜像文件
+ * 与备份里存的串都是它；排版不参与比较，内容一致性一律走 [equals]（语义比较）。
+ *
+ * 写出用 [JsonBuilder]（手写、键序固定、零依赖，人可直接 `cat`/`settings get` 阅读），
+ * 读入用框架自带的 [JSONObject]（system_server / 蓝牙进程均可用，无需引入第三方 JSON；
+ * 其解析天然容忍空白与换行，因此历史紧凑串无需迁移）。
  *
  * 与 [Prefs]/[Avrcp]/[VolumeMode]/[DeviceConfig] 一样同时被 App 进程与 Hook 端
  * （system_server / 蓝牙进程）使用。
@@ -169,21 +173,14 @@ class VolumeConfig(
     // ==================== JSON 序列化 ====================
 
     /**
-     * 序列化为紧凑单行 JSON（无空白、键序固定）。供 SharedPreferences 暂存与差异比对基线
-     * （两次序列化相等即内容一致，与排版无关）。
-     */
-    fun toJson(): String = buildJson(false)
-
-    /**
-     * 序列化为缩进两空格的易读 JSON，内容与 [toJson] 解析等价，仅排版不同。供写入
-     * `Settings.Global` 与镜像文件，便于人工 `cat`/`settings get` 直接查看。
+     * 序列化为缩进两空格的格式化 JSON（全链路唯一的写出形态：App 暂存、`Settings.Global`、
+     * 配置镜像与备份存的都是它），便于人工 `cat`/`settings get` 直接阅读与手改。
+     *
      * 全程只用双引号、不含单引号，可安全嵌入 `settings put global '<v>'` 与 `echo '<v>'`
-     * （POSIX 单引号原样保留其中的换行）。
+     * （POSIX 单引号原样保留其中的换行）。内容一致性靠 [equals] 语义比较，不靠串比对。
      */
-    fun toPrettyJson(): String = buildJson(true)
-
-    private fun buildJson(pretty: Boolean): String {
-        val json = JsonBuilder(pretty)
+    fun toJson(): String {
+        val json = JsonBuilder()
         json.obj {
             bool(KEY_MODULE, moduleEnabled)
             bool(KEY_ENABLED, enabled)
@@ -386,20 +383,20 @@ class VolumeConfig(
 /**
  * 极简 JSON 写出器（只写本模块配置需要的 `对象 / 整数 / 布尔`，不支持转义与数组）。
  *
- * 刻意不用 `JSONObject` 写出：其 JVM 实现按 `HashMap` 迭代，键序不稳定，而紧凑串要
- * 充当「两次序列化可比对」的差异基线、格式化串要给人读，键序必须固定。
+ * 刻意不用 `JSONObject` 写出：其 JVM 实现按 `HashMap` 迭代，键序不稳定，而本模块的配置串
+ * 既要给人读也要写入备份与系统键，键序必须固定。
  *
- * [pretty] 为真时缩进两空格并换行，为假时输出无空白的单行串。
+ * 只有一种输出形态：缩进两空格并换行（排版不影响解析，[VolumeConfig.fromJson] 容忍空白）。
  */
-private class JsonBuilder(private val pretty: Boolean) {
+private class JsonBuilder {
 
-    private val sb = StringBuilder(if (pretty) 640 else 256)
+    private val sb = StringBuilder(640)
     private var indent = 0
 
     /** 当前层是否已写过成员（决定下一个成员前是否补逗号）。 */
     private var hasMember = false
 
-    /** 格式化模式下刚开一个对象：首个成员前要先换行，否则成员会挤在 `{` 同一行。 */
+    /** 刚开一个对象：首个成员前要先换行，否则成员会挤在 `{` 同一行。 */
     private var freshOpen = false
 
     fun build(): String = sb.toString()
@@ -410,12 +407,12 @@ private class JsonBuilder(private val pretty: Boolean) {
         sb.append('{')
         indent++
         hasMember = false
-        freshOpen = pretty
+        freshOpen = true
         block()
         val nested = hasMember
         indent--
         if (nested) {
-            sb.append(nl).append(pad)
+            sb.append(NL).append(pad)
         }
         sb.append('}')
         hasMember = true
@@ -434,18 +431,21 @@ private class JsonBuilder(private val pretty: Boolean) {
 
     private fun pre(key: String?) {
         when {
-            hasMember -> sb.append(',').append(nl)
-            freshOpen -> sb.append(nl)
+            hasMember -> sb.append(',').append(NL)
+            freshOpen -> sb.append(NL)
         }
         freshOpen = false
-        hasMember = true
         sb.append(pad)
         if (key != null) {
-            sb.append('"').append(key).append('"').append(if (pretty) ": " else ":")
+            sb.append('"').append(key).append('"').append(": ")
         }
+        hasMember = true
     }
 
-    private val nl: String get() = if (pretty) "\n" else ""
+    private val pad: String get() = "  ".repeat(indent)
 
-    private val pad: String get() = if (pretty) "  ".repeat(indent) else ""
+    private companion object {
+        /** 成员分隔与缩进用的换行（统一成常量，避免排版字面量散落）。 */
+        const val NL = "\n"
+    }
 }

@@ -85,7 +85,7 @@
     <string name="status_module_inactive_default">模块配置：未启用（系统默认）</string>
     <string name="status_module_inactive_restore">模块配置：已关闭，需重启系统框架恢复</string>
     <string name="status_volume_line">档位：当前 %1$d · 默认 %2$d（%3$s）· 音量键步进 %4$d</string>
-    <string name="status_bt_none">蓝牙音频设备：未连接（连接耳机后可回来看映射预览）</string>
+    <string name="status_bt_none">蓝牙音频设备：未连接</string>
     <string name="status_bt_devices">蓝牙音频设备：%1$s</string>
     <string name="status_bt_item">%1$s（%2$s）</string>
     <string name="status_bt_generic">蓝牙设备</string>
@@ -256,6 +256,7 @@
     <string name="debug_root">Root：%1$s</string>
     <string name="debug_lsposed">LSPosed：%1$s</string>
     <string name="debug_framework">Xposed 框架：%1$s</string>
+    <string name="debug_default_steps">默认档位：%1$s</string>
     <string name="debug_steps_source">档位数来源：%1$s</string>
     <string name="debug_available">可用</string>
     <string name="debug_unavailable">不可用</string>

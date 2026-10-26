@@ -68,6 +68,13 @@ object XposedKit {
     /** 单个日志文件大小上限（超过后清空重写，避免无限增长）。 */
     private const val LOG_FILE_MAX_BYTES = 512L * 1024L
 
+    /**
+     * 配置镜像可接受的字节上限：配置已改为只有一种格式化串（缩进与换行使长度比旧紧凑串
+     * 约增长一倍，实测约 1.1KB），故把上限从 4096 放宽到 8192，留出余量避免后续新增字段
+     * 撑满上限后镜像兜底静默失效（超限一律当作读不到处理）。
+     */
+    private const val MIRROR_MAX_BYTES = 8192L
+
     // ==================== 进程状态 ====================
 
     /** 是否系统框架进程（决定日志文件位置与 Context 解析方式）。 */
@@ -439,7 +446,7 @@ object XposedKit {
     private fun readMirrorConfig(): String? = try {
         val file = File(Prefs.MIRROR_CONFIG_FILE)
         val length = file.length()
-        if (!file.isFile || length <= 0 || length > 4096) {
+        if (!file.isFile || length <= 0 || length > MIRROR_MAX_BYTES) {
             null
         } else {
             val buffer = ByteArray(length.toInt())

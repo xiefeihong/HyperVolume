@@ -3,6 +3,7 @@ package com.xiefeihong.hypervolume.app
 import android.content.Context
 import android.content.SharedPreferences
 import com.xiefeihong.hypervolume.core.Prefs
+import com.xiefeihong.hypervolume.core.VolumeConfig
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -19,8 +20,8 @@ import java.util.Locale
  *    恢复时据此比对「有未保存的修改」，并可选回写系统。
  *
  * 配置本身就是一段 JSON，导出时一律**写成嵌套对象**（而非转义字符串），便于用户直接
- * 查看与改档位；导入时对象再序列化回紧凑串写回偏好。解析不出对象的（无配置 / 畸形）
- * 保持字符串，不静默丢数据。
+ * 查看与改档位；导入时对象再经 [ConfigJson.normalize] 归一为全链路唯一的格式化串写回偏好。
+ * 解析不出对象的（无配置 / 畸形）保持原文，不静默丢数据。
  *
  * 解析与写回都是纯数据操作（不碰 root）；root 推送由调用方经 [SaveEngine.pushConfig] 完成，
  * 便于单测覆盖格式校验与类型还原。
@@ -104,14 +105,14 @@ internal object BackupFormat {
         return BackupContent(
             recordCount = values.size,
             preferences = values,
-            effectiveJson = ConfigJson.toText(root.opt(GLOBAL)),
+            effectiveJson = ConfigJson.normalize(ConfigJson.toText(root.opt(GLOBAL))),
         )
     }
 }
 
 /**
  * 配置文本与存档对象的互转：配置（暂存键 / 生效键）本身就是一段 JSON，
- * 导出时写成嵌套对象便于阅读与手工修改，导入时再序列化回紧凑串恢复成字符串偏好。
+ * 导出时写成嵌套对象便于阅读与手工修改，导入时再归一回唯一的格式化串恢复成字符串偏好。
  *
  * 解析失败（空串、畸形、旧版直存文本）一律原样保留字符串，不静默丢数据。
  */
@@ -124,6 +125,13 @@ internal object ConfigJson {
     /** 存档里的值（对象或字符串）→ 配置文本；缺失返回空串。 */
     fun toText(value: Any?): String =
         if (value == null || value === JSONObject.NULL) "" else value.toString()
+
+    /**
+     * 配置文本的**归一化**：能解析成 [VolumeConfig] 的一律重写成全链路唯一的格式化串——
+     * [toText] 拿到的是 `JSONObject.toString()`（无缩进），直接写回偏好会让暂存键多出一种排版。
+     * 解析不出的（空串 / 畸形 / 旧版直存文本）原样返回。
+     */
+    fun normalize(text: String): String = VolumeConfig.fromJson(text)?.toJson() ?: text
 }
 
 /** 一份解析完成的备份内容。 */
@@ -178,7 +186,11 @@ internal object PreferenceCodec {
         // optString 对 JSON null 返回 "null" 字面量，这里一并挡掉
         if (key == "null") return null
         val value: Any? = when (entry.optString(TYPE)) {
-            TYPE_STRING -> ConfigJson.toText(entry.opt(VALUE))
+            TYPE_STRING -> {
+                val text = ConfigJson.toText(entry.opt(VALUE))
+                // 配置键恢复成唯一的格式化串，其余字符串（语言 tag 等）原样保留
+                if (key == Prefs.KEY_CONFIG_JSON) ConfigJson.normalize(text) else text
+            }
             TYPE_INT -> entry.optInt(VALUE)
             TYPE_LONG -> entry.optLong(VALUE)
             TYPE_FLOAT -> entry.optDouble(VALUE).toFloat()

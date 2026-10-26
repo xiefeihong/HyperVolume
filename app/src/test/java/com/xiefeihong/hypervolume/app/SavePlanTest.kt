@@ -7,6 +7,7 @@ import com.xiefeihong.hypervolume.core.Prefs
 import com.xiefeihong.hypervolume.core.Range
 import com.xiefeihong.hypervolume.core.VolumeConfig
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -37,6 +38,19 @@ class SavePlanTest : TextBackedTest() {
     fun identicalConfig_producesNoChanges() {
         val c = baseConfig()
         assertTrue(describeChanges(c, c).isEmpty())
+    }
+
+    @Test
+    fun readBackVerification_ignoresLayoutButNotContent() {
+        val pending = baseConfig().withEnabled(true)
+        // 回读校验是语义比较：格式化串、旧的单行紧凑串都算写入成功
+        assertTrue(readBackMatches(pending.toJson(), pending))
+        val compact = pending.toJson().replace("\n", "").replace(", ", ",").replace(": ", ":")
+        assertTrue(readBackMatches(compact, pending))
+        // 内容不同 / 读不回东西（空串、畸形）仍判为失败
+        assertFalse(readBackMatches(pending.withEnabled(false).toJson(), pending))
+        assertFalse(readBackMatches("", pending))
+        assertFalse(readBackMatches("null", pending))
     }
 
     @Test

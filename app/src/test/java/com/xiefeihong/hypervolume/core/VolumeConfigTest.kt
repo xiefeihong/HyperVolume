@@ -10,7 +10,8 @@ import org.junit.Test
 /**
  * [VolumeConfig] 的 JSON 序列化/解析往返、畸形输入回落、构造期钳制的 JVM 单元测试。
  *
- * 紧凑串是「两次序列化可比对」的差异基线，故其键序与字面形式一并锁死。
+ * 格式化串是全链路唯一的写出形态（暂存 / `Settings.Global` / 镜像 / 备份同源），
+ * 故其键序与字面形式一并锁死；内容一致性靠语义比较，排版不参与。
  */
 class VolumeConfigTest {
 
@@ -34,17 +35,20 @@ class VolumeConfigTest {
     }
 
     @Test
-    fun prettyJson_parsesEquivalentToCompact() {
+    fun layoutIsIrrelevantForSemantics() {
         val c = sample()
-        val compact = c.toJson()
-        val fromPretty = VolumeConfig.fromJson(c.toPrettyJson())
-        assertNotNull(fromPretty)
-        assertEquals(compact, fromPretty!!.toJson())
-        assertTrue(c.toPrettyJson().startsWith("{\n  \"module\": true,"))
+        val pretty = c.toJson()
+        assertTrue(pretty.startsWith("{\n  \"module\": true,"))
+        // 手写配置常把格式化串挤成单行：排版不同但语义相等的两种串解析结果一致
+        val singleLine = pretty.replace("\n", "").replace(", ", ",").replace(": ", ":")
+        val fromSingleLine = VolumeConfig.fromJson(singleLine)
+        assertNotNull(fromSingleLine)
+        assertEquals(c, fromSingleLine)
+        assertEquals(pretty, fromSingleLine!!.toJson())
     }
 
     @Test
-    fun compactJsonShapeIsLocked() {
+    fun jsonShapeIsLocked() {
         val c = VolumeConfig(
             true, 50, 15,
             dev(Prefs.BT_MODE_DEFAULT, Range(0, 127, 0), Range(0, 100, 0), Range(0, 50, 0)),
@@ -53,17 +57,58 @@ class VolumeConfigTest {
         )
         // 键序固定（写出器手写，不受 JSONObject 的 HashMap 顺序影响）；模式A 范围仅蓝牙写。
         assertEquals(
-            "{\"module\":true,\"enabled\":true,\"mediaSteps\":50,\"keySteps\":15,\"devices\":{" +
-                "\"speaker\":{\"mode\":0," +
-                "\"b\":{\"min\":0,\"max\":100,\"curve\":0}," +
-                "\"d\":{\"min\":0,\"max\":50,\"curve\":0}}," +
-                "\"wired\":{\"mode\":2," +
-                "\"b\":{\"min\":1,\"max\":40,\"curve\":1}," +
-                "\"d\":{\"min\":0,\"max\":100,\"curve\":0}}," +
-                "\"bt\":{\"mode\":1," +
-                "\"a\":{\"min\":10,\"max\":127,\"curve\":2}," +
-                "\"b\":{\"min\":0,\"max\":100,\"curve\":0}," +
-                "\"d\":{\"min\":0,\"max\":100,\"curve\":0}}}}",
+            """{
+              |  "module": true,
+              |  "enabled": true,
+              |  "mediaSteps": 50,
+              |  "keySteps": 15,
+              |  "devices": {
+              |    "speaker": {
+              |      "mode": 0,
+              |      "b": {
+              |        "min": 0,
+              |        "max": 100,
+              |        "curve": 0
+              |      },
+              |      "d": {
+              |        "min": 0,
+              |        "max": 50,
+              |        "curve": 0
+              |      }
+              |    },
+              |    "wired": {
+              |      "mode": 2,
+              |      "b": {
+              |        "min": 1,
+              |        "max": 40,
+              |        "curve": 1
+              |      },
+              |      "d": {
+              |        "min": 0,
+              |        "max": 100,
+              |        "curve": 0
+              |      }
+              |    },
+              |    "bt": {
+              |      "mode": 1,
+              |      "a": {
+              |        "min": 10,
+              |        "max": 127,
+              |        "curve": 2
+              |      },
+              |      "b": {
+              |        "min": 0,
+              |        "max": 100,
+              |        "curve": 0
+              |      },
+              |      "d": {
+              |        "min": 0,
+              |        "max": 100,
+              |        "curve": 0
+              |      }
+              |    }
+              |  }
+              |}""".trimMargin(),
             c.toJson(),
         )
     }

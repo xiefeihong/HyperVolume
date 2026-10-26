@@ -29,6 +29,8 @@ data class DebugSnapshot(
     val rootGranted: Boolean,
     val lsposedInstalled: Boolean,
     val framework: String,
+    /** 系统原本的媒体档位数（未受模块改写时的值），与主页档位行的默认值同源。 */
+    val systemDefaultSteps: Int,
     val stepsSource: StepsSource,
     /** `Settings.Global` 中本模块键的原文（空串表示无）。 */
     val effectiveConfig: String,
@@ -42,6 +44,7 @@ internal fun debugInfoLines(snapshot: DebugSnapshot): List<String> = buildList {
     addAll(deviceInfoLines(snapshot))
     add(AppText.str(R.string.debug_root, availability(snapshot.rootGranted)))
     add(AppText.str(R.string.debug_lsposed, installation(snapshot.lsposedInstalled)))
+    add(AppText.str(R.string.debug_default_steps, snapshot.systemDefaultSteps.toString()))
     add(AppText.str(R.string.debug_steps_source, stepsSourceLabel(snapshot.stepsSource)))
     add(AppText.str(R.string.debug_log_paths, snapshot.logPaths.joinToString(AppText.str(R.string.list_separator))))
     add(AppText.str(R.string.debug_config_title))
@@ -109,6 +112,7 @@ class DebugInfoCollector(
             rootGranted = rootAvailable,
             lsposedInstalled = Shell.isLsposedPresent(),
             framework = "libxposed API $XPOSED_API_VERSION",
+            systemDefaultSteps = probe.systemDefaultSteps(),
             stepsSource = probe.stepsSource(),
             effectiveConfig = effective,
             stagedConfig = store.rawJson(),

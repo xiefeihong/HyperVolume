@@ -75,7 +75,7 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
 
     init {
         // 冷启动：按当前输出设备定位标签；基线取暂存配置（等价旧 loadConfigIntoUi 末尾的
-        // lastSavedJson = model.toJson()），避免首次打开就提示「有未保存的修改」。
+        // lastSaved = model），避免首次打开就提示「有未保存的修改」。
         val cold = EditorState.load(
             store = store,
             systemDefaultSteps = probe.systemDefaultSteps(),
@@ -83,7 +83,7 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
         )
         _state = MutableStateFlow(
             UiState(
-                editor = cold.markSaved(cold.model.toJson()),
+                editor = cold.markSaved(cold.model),
                 status = null,
                 language = settings.language,
                 themeMode = settings.themeMode,
@@ -177,7 +177,7 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
                     detectedDevice = null,
                     keepDevice = editor.editingDevice,
                 )
-                editor = reloaded.markSaved(reloaded.model.toJson())
+                editor = reloaded.markSaved(reloaded.model)
                 notify(AppText.str(R.string.config_adopted))
             }
             _state.update { it.copy(status = snapshot, editor = editor) }
@@ -207,8 +207,8 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
         setDialog(DialogSpec.None)
         launchBusy {
             val result = engine.commit(plan)
-            val savedJson = result.savedJson
-            if (savedJson != null) markSaved(savedJson)
+            val saved = result.savedConfig
+            if (saved != null) markSaved(saved)
             when (val follow = result.followUp) {
                 is FollowUp.Failed -> notify(follow.message)
                 FollowUp.Done -> {
@@ -279,7 +279,7 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
             notify(SaveEngine.Messages.autoSaveFail)
             return
         }
-        markSaved(result.savedJson)
+        markSaved(result.savedConfig)
         if (result.bluetoothFailed) notify(SaveEngine.Messages.btRestartFail)
         refreshStatus()
     }
@@ -411,22 +411,22 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
     private suspend fun applyBackup(content: BackupContent) {
         backup.applyPreferences(content)
         val restored = VolumeConfig.fromJson(content.effectiveJson)
-        var baseline = ""
+        var baseline: VolumeConfig? = null
         if (restored != null && withContext(Dispatchers.IO) { Shell.isRootAvailable() }) {
             val push = engine.pushConfig(restored)
-            baseline = if (push.verified) push.configJson else ""
+            baseline = if (push.verified) push.savedConfig else null
             if (!push.verified) notify(SaveEngine.Messages.pushFail)
         }
         reloadAfterRestore(baseline)
         notify(AppText.str(R.string.backup_import_ok, content.recordCount))
-        if (baseline.isNotEmpty()) notify(AppText.str(R.string.backup_imported_restart))
+        if (baseline != null) notify(AppText.str(R.string.backup_imported_restart))
     }
 
     /**
-     * 导入后重载界面：暂存区已是备份内容，基线取回写成功的生效 JSON
-     * （回写失败/无 root 时基线为空串 → 界面如实提示「有未保存的修改」）。
+     * 导入后重载界面：暂存区已是备份内容，基线取回写成功的生效配置模型
+     * （回写失败/无 root 时基线为 null → 界面如实提示「有未保存的修改」）。
      */
-    private suspend fun reloadAfterRestore(baselineJson: String) {
+    private suspend fun reloadAfterRestore(baseline: VolumeConfig?) {
         val systemDefault = withContext(Dispatchers.IO) { probe.systemDefaultSteps() }
         val editor = EditorState.load(
             store = store,
@@ -436,7 +436,7 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
         )
         _state.update {
             it.copy(
-                editor = editor.markSaved(baselineJson),
+                editor = editor.markSaved(baseline),
                 language = settings.language,
                 themeMode = settings.themeMode,
             )
@@ -510,8 +510,8 @@ class HyperVolumeViewModel(application: Application) : AndroidViewModel(applicat
         _notices.tryEmit(text)
     }
 
-    private fun markSaved(json: String) =
-        _state.update { it.copy(editor = it.editor.markSaved(json)) }
+    private fun markSaved(config: VolumeConfig?) =
+        _state.update { it.copy(editor = it.editor.markSaved(config)) }
 
     /** 串行执行 root 动作并置忙碌位（按钮在此期间禁用）。 */
     private fun launchBusy(block: suspend () -> Unit) {

@@ -85,7 +85,7 @@
     <string name="status_module_inactive_default">Module: disabled (system default)</string>
     <string name="status_module_inactive_restore">Module: off, restart the system framework to restore</string>
     <string name="status_volume_line">Steps: current %1$d · default %2$d (%3$s) · key increment %4$d</string>
-    <string name="status_bt_none">Bluetooth audio devices: none (connect a headset to see the mapping preview)</string>
+    <string name="status_bt_none">Bluetooth audio devices: not connected</string>
     <string name="status_bt_devices">Bluetooth audio devices: %1$s</string>
     <string name="status_bt_item">%1$s (%2$s)</string>
     <string name="status_bt_generic">Bluetooth device</string>
@@ -256,6 +256,7 @@
     <string name="debug_root">Root: %1$s</string>
     <string name="debug_lsposed">LSPosed: %1$s</string>
     <string name="debug_framework">Xposed framework: %1$s</string>
+    <string name="debug_default_steps">Default steps: %1$s</string>
     <string name="debug_steps_source">Step count source: %1$s</string>
     <string name="debug_available">available</string>
     <string name="debug_unavailable">unavailable</string>
