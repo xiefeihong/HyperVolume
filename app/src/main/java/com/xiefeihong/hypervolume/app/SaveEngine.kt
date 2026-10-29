@@ -156,7 +156,10 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
         val softwareMode = model.modeFor(OutputDevice.BT) == Prefs.BT_MODE_SOFTWARE
         val active = model.remapActive
         val avTarget = if (active && softwareMode) "1" else "0"
-        val avValue = if (store.readGlobalSetting(Shell.SETTING_AV_DISABLE) == avTarget) null else avTarget
+        // 现值单独留存：性能日志要把「读到的现值 → 目标值」写出来，否则 av=write 无法区分
+        // 「真的需要写」与「读不到值而退化成每次都写」。
+        val avCurrent = store.readGlobalSetting(Shell.SETTING_AV_DISABLE)
+        val avValue = if (avCurrent == avTarget) null else avTarget
         val expected = if (avValue != null) PushMarks.LANDING + PushMarks.AV else PushMarks.LANDING
         val push = Shell.pushAll(Prefs.GLOBAL_KEY, pushJson, avValue)
         val missing = PushMarks.missing(push.output, expected)
@@ -177,8 +180,11 @@ class SaveEngine(private val store: ConfigStore, private val probe: StatusProbe)
         if (perf) {
             val total = (System.nanoTime() - t0) / 1_000_000
             Shell.appendSysLog(
-                "push perf total=${total}ms av=${if (avValue == null) "skip" else "write"}" +
-                    " boot=${if (!putFailed && bootChanged) "write" else "skip"}",
+                "push perf total=${total}ms " + perfDecisionText(
+                    avCurrent = avCurrent, avTarget = avTarget, avWillWrite = avValue != null,
+                    recorded = record, active = active, steps = steps,
+                    bootWillWrite = !putFailed && bootChanged,
+                ),
             )
         }
         PushResult(
@@ -421,6 +427,24 @@ internal fun readBackMatches(readBackRaw: String, pending: VolumeConfig): Boolea
  */
 internal fun bootScriptShouldRewrite(active: Boolean, steps: Int, recorded: BootScriptRecord?): Boolean =
     recorded == null || recorded.active != active || recorded.steps != steps
+
+/**
+ * 性能日志里的落点决策摘要（纯函数，供单测）：把两处幂等判据的「输入 → 结论」都写在同一行。
+ *
+ * 旧写法只写 `av=write` / `boot=skip` 结论，看到异常值时无法区分原因，典型两种：
+ *  - `av=write(cur=null want=1)`：现值读不到（非 root 读全局设置失败），于是每次都重写；
+ *  - `boot=write(rec=- want=on/100)`：幂等基线缺失（新装 / 清过数据），首写必然发生。
+ * `rec=-` 表示从未记录（[BootScriptRecord] 为 null），`on/off` 为生效标志。
+ */
+internal fun perfDecisionText(
+    avCurrent: String?, avTarget: String, avWillWrite: Boolean,
+    recorded: BootScriptRecord?, active: Boolean, steps: Int, bootWillWrite: Boolean,
+): String {
+    fun flag(value: Boolean) = if (value) "on" else "off"
+    val rec = recorded?.let { "${flag(it.active)}/${it.steps}" } ?: "-"
+    return "av=${if (avWillWrite) "write" else "skip"}(cur=${avCurrent ?: "null"} want=$avTarget)" +
+        " boot=${if (bootWillWrite) "write" else "skip"}(rec=$rec want=${flag(active)}/$steps)"
+}
 
 /** 列出待保存配置相对已生效配置的改动（可读条目）；[base] 为 null 时返回空列表。 */
 internal fun describeChanges(base: VolumeConfig?, pending: VolumeConfig): List<String> {

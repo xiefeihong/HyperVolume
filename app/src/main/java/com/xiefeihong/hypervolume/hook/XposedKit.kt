@@ -64,7 +64,15 @@ object XposedKit {
     /** 模块自写日志：蓝牙进程侧文件名（需拼 filesDir，故保留本地常量）。 */
     private const val BT_LOG_FILE_NAME = "hypervolume_bt.log"
 
-    private const val BT_LOG_FILE_FALLBACK = Shell.BT_LOG_FILE
+    /**
+     * 蓝牙侧最后的兜底路径（CE 存储绝对路径）。
+     *
+     * 不能指回 [Shell.BT_LOG_FILE]——那是 DE 主路径，兜底与主路径同一个文件等于没有兜底。
+     */
+    private const val BT_LOG_FILE_FALLBACK = Shell.BT_LOG_FILE_LEGACY
+
+    /** 文件日志暂缓后的重试间隔：direct-boot 期 CE 存储未解锁导致写失败，解锁后应能自行恢复。 */
+    private const val LOG_PATH_RETRY_MS = 60_000L
 
     /** 单个日志文件大小上限（超过后清空重写，避免无限增长）。 */
     private const val LOG_FILE_MAX_BYTES = 512L * 1024L
@@ -106,6 +114,26 @@ object XposedKit {
 
     private var sLogFileFailureCount = 0
 
+    /** 暂缓文件日志的到期时刻（0 表示未进入暂缓）；到期后重新探测路径。 */
+    @Volatile
+    private var sLogRetryAtMs = 0L
+
+    /**
+     * 日志路径解析结果的一次性留证（最终落到哪个文件、跳过了哪些候选）。
+     * 由 [writeLogFile] 在锁外输出：resolveLogPath 在 LOG_LOCK 内被调用，
+     * 在那里直接打日志会重入写入流程。
+     */
+    @Volatile
+    private var sLogPathNote: String? = null
+
+    /** 全路径不可写时的失败摘要（供 [writeLogFile] 的错误提示带上真实原因）。 */
+    @Volatile
+    private var sLogPathFailures: String? = null
+
+    /** 蓝牙日志候选的一次性留证（DE 上下文/ filesDir 的实际取值）。 */
+    @Volatile
+    private var sBtCandidateNote: String? = null
+
     private val LOG_LOCK = Any()
 
     private val LOG_TIME_FORMAT = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
@@ -144,70 +172,164 @@ object XposedKit {
         }
     }
 
-    /** 追加写入当前进程的日志文件（带级别标记）；文件过大时清空重写，连续失败 3 次后放弃文件日志。 */
+    /**
+     * 追加写入当前进程的日志文件（带级别标记）；文件过大时清空重写。
+     *
+     * 写入连续失败 3 次不再永久放弃：暂缓 [LOG_PATH_RETRY_MS] 后重新探测路径。
+     * 蓝牙进程在 direct-boot 阶段就装 hook 时 CE 存储尚未解锁，旧实现会因此丢掉整轮蓝牙日志。
+     */
     private fun writeLogFile(level: String, message: String?) {
-        // 放弃文件日志的提示需在锁外发出：logErrorOnce→log→writeLogFile 会重入同一 LOG_LOCK，
+        // 降级提示需在锁外发出：logErrorOnce→log→writeLogFile 会重入同一 LOG_LOCK，
         // 虽同线程可重入不死锁，但会在持锁期间触发文件路径重复探测/写失败计数错乱。锁内只置标志。
         var giveUp = false
         var failures = 0
+        var lastError: String? = null
+        var noPath = false
         synchronized(LOG_LOCK) {
-            try {
-                val path = resolveLogPath() ?: return
-                val file = File(path)
-                if (file.length() > LOG_FILE_MAX_BYTES) {
-                    file.delete()
-                }
-                file.parentFile?.takeIf { !it.exists() }?.mkdirs()
-                val time = synchronized(LOG_TIME_FORMAT) { LOG_TIME_FORMAT.format(Date()) }
-                val bytes = ("[$level] $time $message\n").toByteArray(StandardCharsets.UTF_8)
-                FileOutputStream(file, true).use { it.write(bytes) }
-                sLogFileFailureCount = 0
-            } catch (t: Throwable) {
-                failures = ++sLogFileFailureCount
-                if (failures >= 3 && sLogFilePath != null) {
-                    // 连续失败（如 SELinux 限制）：放弃文件日志，依赖 logcat 兜底
-                    sLogFilePath = null
-                    sLogFileFailureCount = 4
-                    giveUp = true
+            val path = resolveLogPath()
+            if (path == null) {
+                noPath = true
+            } else {
+                try {
+                    val file = File(path)
+                    if (file.length() > LOG_FILE_MAX_BYTES) {
+                        file.delete()
+                    }
+                    file.parentFile?.takeIf { !it.exists() }?.mkdirs()
+                    val time = synchronized(LOG_TIME_FORMAT) { LOG_TIME_FORMAT.format(Date()) }
+                    val bytes = ("[$level] $time $message\n").toByteArray(StandardCharsets.UTF_8)
+                    FileOutputStream(file, true).use { it.write(bytes) }
+                    sLogFileFailureCount = 0
+                    sLogRetryAtMs = 0L
+                } catch (t: Throwable) {
+                    failures = ++sLogFileFailureCount
+                    lastError = t.toString()
+                    if (failures >= 3) {
+                        // 连续失败（如 direct-boot 期 CE 未解锁）：暂缓文件日志、依赖 logcat 兜底
+                        sLogFilePath = null
+                        sLogFileFailureCount = 4
+                        sLogRetryAtMs = System.currentTimeMillis() + LOG_PATH_RETRY_MS
+                        giveUp = true
+                    }
                 }
             }
         }
         if (giveUp) {
-            logErrorOnce("logfile-give-up", "log file write failed $failures times, switching to logcat only")
+            logErrorOnce(
+                "logfile-give-up",
+                "log file write failed $failures times ($lastError), retry in ${LOG_PATH_RETRY_MS / 1000}s; " +
+                    "candidates=${logCandidates().joinToString(",")}",
+            )
+        } else if (lastError != null) {
+            // 首次失败就把异常文本留证（旧实现只计数、不记 Throwable，只能靠推断）
+            logOnce("logfile-write-failed", "log file write failed: $lastError")
+        } else if (noPath) {
+            val reason = sLogPathFailures?.let { "; $it" } ?: ""
+            logErrorOnce(
+                "logfile-no-path",
+                "no writable log path, candidates=${logCandidates().joinToString(",")}$reason",
+            )
+        }
+        // 路径一次性留证：蓝牙侧 DE 是否可用、最终写到哪个文件（上一次重启后仍落到 CE，
+        // 而日志里没有任何关于 DE 的信息，只能靠推断）
+        sBtCandidateNote?.let { note ->
+            sBtCandidateNote = null
+            logOnce("bt-log-candidates", note)
+        }
+        sLogPathNote?.let { note ->
+            sLogPathNote = null
+            logOnce("logfile-path", note)
         }
     }
 
-    /** 解析当前进程的日志文件路径（系统框架固定路径；蓝牙优先应用数据目录）。 */
+    /** 解析当前进程的日志文件路径（系统框架：固定路径；蓝牙：DE → CE → 兜底路径）。 */
     private fun resolveLogPath(): String? {
         sLogFilePath?.let { return it }
         if (sLogFileFailureCount > 3) {
+            // 暂缓期内直接返回 null，避免每条日志都重探路径；到期后清零重试
+            if (System.currentTimeMillis() < sLogRetryAtMs) {
+                return null
+            }
+            sLogFileFailureCount = 0
+        }
+        // 先尝试主路径，失败后用备用路径；两个都不可用则依赖 logcat 兜底
+        val candidates = if (sIsSystemProcess) {
+            listOf(SYS_LOG_FILE, SYS_LOG_FILE_FALLBACK)
+        } else {
+            btLogCandidates()
+        }
+        val choice = pickWritableLogPath(candidates)
+        val path = choice.path
+        if (path == null) {
+            // 全不可写：记满计数并进入暂缓，到期再试
+            sLogFileFailureCount = 4
+            sLogRetryAtMs = System.currentTimeMillis() + LOG_PATH_RETRY_MS
+            sLogPathFailures = choice.failures.joinToString("; ")
             return null
         }
-        val path = if (sIsSystemProcess) {
-            // 先尝试主路径，失败后用备用路径；两个都不可用则依赖 logcat 兜底
-            pickWritableLogPath(SYS_LOG_FILE, SYS_LOG_FILE_FALLBACK)
-        } else {
-            bluetoothContext()?.filesDir?.let { File(it, BT_LOG_FILE_NAME).absolutePath }
-                ?: BT_LOG_FILE_FALLBACK
-        }
         sLogFilePath = path
+        sLogPathNote = "log file: $path" + if (choice.failures.isEmpty()) {
+            ""
+        } else {
+            " (skipped ${choice.failures.size}: ${choice.failures.joinToString("; ")})"
+        }
         return path
     }
 
-    /** 依次探测候选日志路径的可写性，返回首个可写路径；全不可写返回 null。 */
-    private fun pickWritableLogPath(primary: String, fallback: String): String? {
-        for (candidate in arrayOf(primary, fallback)) {
+    /**
+     * 蓝牙进程的日志候选路径，按可写性优先级排列：
+     * DE 存储（direct-boot 即可写）→ CE 存储（用户解锁后可写）→ 固定兜底路径。
+     *
+     * DE 主路径用**固定绝对路径**而非 Context 推导：模块加载早于 ActivityThread 绑定
+     * Application（实测 01:00:00.591 装上 hook），此时 [bluetoothContext] 返回 null，
+     * 旧实现直接退化成单条 CE 兜底，DE 候选连构造的机会都没有——这就是 1.1.6 一直写 CE 的根因。
+     * 进程名固定为 com.android.bluetooth，DE 绝对路径是确定的。
+     */
+    private fun btLogCandidates(): List<String> {
+        val note = StringBuilder()
+        val context = bluetoothContext()
+        val resolved = ArrayList<String>(2)
+        if (context == null) {
+            note.append("context=null")
+        } else {
+            val deDir = runCatching { context.createDeviceProtectedStorageContext().filesDir }
+                .onFailure { note.append("deFilesDir=").append(it).append("; ") }
+                .getOrNull()
+            deDir?.let { resolved += File(it, BT_LOG_FILE_NAME).absolutePath }
+            val ceDir = runCatching { context.filesDir }
+                .onFailure { note.append("ceFilesDir=").append(it).append("; ") }
+                .getOrNull()
+            ceDir?.let { resolved += File(it, BT_LOG_FILE_NAME).absolutePath }
+            note.append("deDir=").append(deDir).append("; ceDir=").append(ceDir)
+        }
+        val candidates = btLogCandidatePaths(resolved, Shell.BT_LOG_FILE, BT_LOG_FILE_FALLBACK)
+        if (sBtCandidateNote == null) {
+            sBtCandidateNote = "bt log candidates: ${candidates.joinToString(" | ")} [$note]"
+        }
+        return candidates
+    }
+
+    /** 当前进程的日志候选路径（仅用于失败提示，不参与探测）。 */
+    private fun logCandidates(): List<String> =
+        if (sIsSystemProcess) listOf(SYS_LOG_FILE, SYS_LOG_FILE_FALLBACK) else btLogCandidates()
+
+    /** 依次探测候选日志路径的可写性，返回首个可写路径与各候选的失败摘要。 */
+    internal fun pickWritableLogPath(candidates: List<String>): LogPathChoice {
+        val failures = ArrayList<String>(candidates.size)
+        for (candidate in candidates) {
             val file = File(candidate)
             try {
                 file.parentFile?.takeIf { !it.exists() }?.mkdirs()
-                // 测试是否可写
-                FileOutputStream(file, true).use { it.write(0) }
-                return candidate
-            } catch (ignored: Throwable) {
-                // 该路径不可写，尝试下一个
+                // 打开即证明可创建可写，不写入任何字节：早先写 0 做探测，结果日志文件首字节多了个
+                // NUL，复制日志时接收端把它当字符串结束符，整段内容显示为乱码。
+                FileOutputStream(file, true).use { }
+                return LogPathChoice(candidate, failures)
+            } catch (t: Throwable) {
+                // 该路径不可写：记下真实原因（旧实现静默 catch，蓝牙 DE 失败时无从判断）
+                failures += "$candidate: $t"
             }
         }
-        return null
+        return LogPathChoice(null, failures)
     }
 
     // ==================== 反射工具（纯反射，兼容 ROM 隐藏字段） ====================
@@ -414,7 +536,14 @@ object XposedKit {
                     logErrorOnce("global-invalid", "global config invalid: [$trimmed]")
                 }
             } catch (t: Throwable) {
-                logOnce("global-failed", "read global config failed: $t")
+                // 冷启动早期 ActivityManager 尚未把自己发布到 ServiceManager，ContentResolver 拿不到
+                // settings provider 的入口，会在 null 上调用 IActivityManager.getContentProvider 抛 NPE。
+                // 属预期情形（镜像通道会接住），单独给一条可读日志，避免被当成真故障去查。
+                if (isProviderHostNotReady(t)) {
+                    logOnce("global-not-ready", "read global config skipped: ActivityManager not ready (early boot)")
+                } else {
+                    logOnce("global-failed", "read global config failed: $t")
+                }
             }
         }
         // 通道2：配置镜像文件（不依赖 SettingsProvider；冷启动早期唯一可靠通道）
@@ -568,6 +697,30 @@ object XposedKit {
 
 /** [decideConfigReadPath] 的三种快路径判定结果。 */
 internal enum class ConfigReadPath { CACHE_HIT, NEGATIVE_SKIP, SLOW_PATH }
+
+/**
+ * 日志路径探测结果：[path] 为首个可写候选（全失败为 null），[failures] 记录每个不可写候选的原因。
+ * 旧实现静默 `catch`，蓝牙 DE 路径为何失败只能靠推断。
+ */
+internal data class LogPathChoice(val path: String?, val failures: List<String>)
+
+/**
+ * 蓝牙日志候选路径的排序与去重（纯函数，供单测）：固定 DE → 运行时解析出的路径 → 固定 CE 兜底。
+ * DE 永远排第一，因为它最早可写且不会因为用户未解锁而丢掉整轮 direct-boot 日志。
+ */
+internal fun btLogCandidatePaths(
+    resolved: List<String>, fixedDe: String, fixedCe: String,
+): List<String> = (listOf(fixedDe) + resolved + fixedCe).distinct()
+
+/**
+ * 判定读全局配置的异常是否属于「冷启动早期 provider 宿主还没就绪」（纯函数，供单测）。
+ *
+ * 表现固定为 `NullPointerException`，消息里点名 `IActivityManager`：
+ * `Attempt to invoke interface method '…IActivityManager.getContentProvider(…)' on a null object reference`
+ * ——ActivityManager.getService() 此刻返回 null。其余异常（超时、死对象等）仍按真失败记录。
+ */
+internal fun isProviderHostNotReady(t: Throwable): Boolean =
+    t is NullPointerException && t.message?.contains("IActivityManager") == true
 
 /**
  * 热路径读配置的分支判定（纯函数，假时钟注入即可单测，不碰 Android 运行时）：

@@ -22,8 +22,30 @@ object Shell {
     /** 系统框架日志的备用路径（`/data/system/` 被 SELinux 拦阻时回落；读/清日志都扫这一份）。 */
     const val SYS_LOG_FILE_FALLBACK = "/data/misc/hypervolume_sys.log"
 
-    /** 蓝牙进程侧模块日志（蓝牙应用数据目录）。 */
-    const val BT_LOG_FILE = "/data/data/com.android.bluetooth/files/hypervolume_bt.log"
+    /**
+     * 蓝牙进程侧模块日志（DE 存储）。
+     *
+     * 蓝牙进程在 direct-boot 阶段就开始运行，此时 CE 存储（`/data/user/0/...`）尚未解锁，
+     * 写在 CE 会整轮丢日志；DE（`/data/user_de/0/...`）在 direct-boot 即可写。
+     */
+    const val BT_LOG_FILE = "/data/user_de/0/com.android.bluetooth/files/hypervolume_bt.log"
+
+    /** 蓝牙日志的历史（CE）路径：1.1.6 之前写在这里，读取/清理仍要覆盖，避免看到上次开机的旧内容。 */
+    const val BT_LOG_FILE_LEGACY = "/data/data/com.android.bluetooth/files/hypervolume_bt.log"
+
+    /**
+     * root 追加日志前的属主校正片段（拼在同一条 su 命令里，不增加 su 往返）。
+     *
+     * 日志文件由 system_server（uid 1000）追加。若 App 以 root 抢先创建，文件会变成
+     * `root:root 0644`，system_server 追加失败后整体回落到 [SYS_LOG_FILE_FALLBACK]，
+     * 系统侧日志被劈成两份（实测：/data/system 只有 [App] 行，/data/misc 全是模块行）。
+     *
+     * 无条件校正（而非只建文件时）：已装好的旧版本现场就是被 root 占着的，需要能自愈；
+     * 对已经是 system 属主的文件，这两个调用都是无害的 no-op。
+     */
+    private const val ENSURE_SYS_LOG =
+        "f=$SYS_LOG_FILE; touch \$f 2>/dev/null; chown 1000:1000 \$f 2>/dev/null; " +
+            "chmod 0660 \$f 2>/dev/null; "
 
     /** 模块日志统一标记（grep / LSPosed 日志过滤用），与 YLog tag 保持一致。 */
     const val LOG_MARKER = "HyperVolume"
@@ -211,7 +233,8 @@ object Shell {
      * 蓝牙耳机等设备会断开，需要重新连接。
      */
     fun restartBluetooth(): ShellResult = su(
-        "echo \"[\$(date '+%m-%d %H:%M:%S')][App] restart bluetooth requested\" " +
+        ENSURE_SYS_LOG +
+            "echo \"[\$(date '+%m-%d %H:%M:%S')][App] restart bluetooth requested\" " +
             ">> $SYS_LOG_FILE 2>/dev/null; " +
             "svc bluetooth disable 2>/dev/null || cmd bluetooth_manager disable; " +
             "sleep 1.5; " +
@@ -226,7 +249,8 @@ object Shell {
      * 可在应用内「查看模块日志」核对是否真正重启（old != new 即已重启）。
      */
     fun restartSystemServer(): ShellResult = su(
-        "echo \"[\$(date '+%m-%d %H:%M:%S')][App] restart system_server requested\" " +
+        ENSURE_SYS_LOG +
+            "echo \"[\$(date '+%m-%d %H:%M:%S')][App] restart system_server requested\" " +
             ">> $SYS_LOG_FILE 2>/dev/null; " +
             "OLD=\$(pidof system_server); " +
             "kill -9 \$OLD 2>/dev/null || killall -9 system_server 2>/dev/null; " +
@@ -244,18 +268,29 @@ object Shell {
         if (message.isNullOrEmpty()) {
             return
         }
+        su(appendSysLogCommand(message))
+    }
+
+    /**
+     * 构造「追加一条应用侧日志」的 root 命令（纯函数，供单测）。
+     *
+     * [ENSURE_SYS_LOG] 必须在前：先建文件并校正成 system 属主，再以 root 追加，
+     * 这样 system_server 才能继续往同一文件写（否则日志被劈到备用路径）。
+     */
+    internal fun appendSysLogCommand(message: String): String {
         val safe = message.replace("\\", "\\\\")
             .replace("\"", "\\\"")
             .replace("$", "\\$")
             .replace("`", "\\`")
-        su("echo \"[\$(date '+%m-%d %H:%M:%S')][App] $safe\" >> $SYS_LOG_FILE 2>/dev/null")
+        return ENSURE_SYS_LOG +
+            "echo \"[\$(date '+%m-%d %H:%M:%S')][App] $safe\" >> $SYS_LOG_FILE 2>/dev/null"
     }
 
     /**
      * 读取模块日志。
      *
      * 模块自写日志文件优先（不依赖 LSPosed 日志实现）：
-     * system_server → [SYS_LOG_FILE]；蓝牙进程 → [BT_LOG_FILE]。
+     * system_server → [SYS_LOG_FILE]；蓝牙进程 → [BT_LOG_FILE]（DE），为空时回退 [BT_LOG_FILE_LEGACY]（CE，旧版写入点）。
      * 再合并 LSPosed 日志文件与 logcat 结果；全部为空时附上诊断信息。
      */
     fun readModuleLogs(): String {
@@ -263,9 +298,14 @@ object Shell {
             "echo '@SYS@'; " +
                 "tail -n 200 $SYS_LOG_FILE 2>/dev/null; " +
                 "tail -n 200 $SYS_LOG_FILE_FALLBACK 2>/dev/null; " +
-                "echo '@BT@'; tail -n 200 $BT_LOG_FILE 2>/dev/null; " +
+                "echo '@BT@'; " +
+                // DE 为空才看 CE：否则升级后会同时看到本次开机（DE）与上一次开机（CE 残留）的两段日志
+                "if [ -s $BT_LOG_FILE ]; then tail -n 200 $BT_LOG_FILE; " +
+                "else tail -n 200 $BT_LOG_FILE_LEGACY 2>/dev/null; fi; " +
                 "echo '@LSPD@'; grep -a -h '$LOG_MARKER' /data/adb/lspd/log/* 2>/dev/null" +
-                " | tail -n 150; " +
+                // modules_<时间>.log 与 verbose_<时间>.log 内容重叠（实测各 75 行）：先按整行去重再截断，
+                // 否则 150 行额度被重复内容占满，有效窗口只剩一半。
+                " | awk '!seen[\$0]++' | tail -n 150; " +
                 "echo '@LOGCAT@'; logcat -d -t 500 2>/dev/null" +
                 " | grep -a '$LOG_MARKER' | tail -n 150",
         )
@@ -296,23 +336,29 @@ object Shell {
                 .append("• /data/adb/lspd/log/\n")
                 .append("• $BT_LOG_FILE")
         }
-        return report.toString().trim()
+        return sanitizeLogText(report.toString()).trim()
     }
 
     /**
-     * 清理模块日志：删除模块自写的专用文件 + 清除 logcat。
+     * 清理模块日志：删除模块自写的专用文件（含蓝牙的 DE / CE 两份）+ 清除 logcat。
      *
      * LSPosed 日志（/data/adb/lspd/log/）是多模块共享的追加文件，不能整体删除；
      * 这里用 `sed` 只剔除含本模块标记 [LOG_MARKER] 的行，保留其他模块日志。
+     *
+     * 删除后立刻把系统日志文件按 system 属主重建：否则下一次保存会由 root 抢先建文件，
+     * 把 system_server 挤到 [SYS_LOG_FILE_FALLBACK]，日志从此劈成两份。
      */
     fun clearModuleLogs() {
-        su(
-            "rm -f $SYS_LOG_FILE $SYS_LOG_FILE_FALLBACK $BT_LOG_FILE 2>/dev/null; " +
-                "for f in /data/adb/lspd/log/*; do " +
-                "[ -f \"\$f\" ] && sed -i '/$LOG_MARKER/d' \"\$f\" 2>/dev/null; done; " +
-                "logcat -c 2>/dev/null",
-        )
+        su(clearModuleLogsCommand())
     }
+
+    /** 构造「清理模块日志」的 root 命令（纯函数，供单测）。 */
+    internal fun clearModuleLogsCommand(): String =
+        "rm -f $SYS_LOG_FILE $SYS_LOG_FILE_FALLBACK $BT_LOG_FILE $BT_LOG_FILE_LEGACY 2>/dev/null; " +
+            ENSURE_SYS_LOG +
+            "for f in /data/adb/lspd/log/*; do " +
+            "[ -f \"\$f\" ] && sed -i '/$LOG_MARKER/d' \"\$f\" 2>/dev/null; done; " +
+            "logcat -c 2>/dev/null"
 
     /** 截取 [startKey] 与 [endKey] 之间的输出段（endKey 为 null 时到结尾）。 */
     private fun section(output: String, startKey: String, endKey: String?): String {
@@ -328,6 +374,16 @@ object Shell {
         return output.substring(start, end).trim()
     }
 }
+
+/**
+ * 剔除日志文本里的 NUL 字符（纯函数，供单测）。
+ *
+ * 历史版本用「向文件写一个 0 字节」探测日志文件可写性，文件首字节因此是 NUL；`tail` 原样带出后
+ * `trim()` 不会去掉它（NUL 不是空白），复制进剪贴板后接收方常把它当字符串结束符，整段日志显示为乱码。
+ * 写入侧已改成只打开不写字节，这里再兜一层：设备上已有的旧文件仍会带 NUL，读到即剥除。
+ */
+internal fun sanitizeLogText(text: String): String =
+    if (text.indexOf('\u0000') < 0) text else text.replace("\u0000", "")
 
 /**
  * [Shell.pushAll] 一次 su 里各段落成功时回显的落点标记。

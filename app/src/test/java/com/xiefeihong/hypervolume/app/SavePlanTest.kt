@@ -140,4 +140,28 @@ class SavePlanTest : TextBackedTest() {
         assertEquals("系统框架", SaveEngine.Messages.restartWhat(false, true))
         assertTrue(SaveEngine.Messages.restartNowMsg(false, true).contains("需重启系统框架才能生效"))
     }
+
+    @Test
+    fun perfText_showsSkipWithMatchingValues() {
+        // 现值与目标一致 + 基线命中：两处都 skip，同时把比对依据写出来
+        assertEquals(
+            "av=skip(cur=1 want=1) boot=skip(rec=on/100 want=on/100)",
+            perfDecisionText(
+                avCurrent = "1", avTarget = "1", avWillWrite = false,
+                recorded = BootScriptRecord(true, 100), active = true, steps = 100, bootWillWrite = false,
+            ),
+        )
+    }
+
+    @Test
+    fun perfText_marksMissingCurrentAndBaseline() {
+        // 现值读不到（null）+ 基线缺失（首次保存）：两者都必须写，且原因可见
+        assertEquals(
+            "av=write(cur=null want=1) boot=write(rec=- want=on/100)",
+            perfDecisionText(
+                avCurrent = null, avTarget = "1", avWillWrite = true,
+                recorded = null, active = true, steps = 100, bootWillWrite = true,
+            ),
+        )
+    }
 }

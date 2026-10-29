@@ -93,11 +93,13 @@ object BtHooks {
     }
 
     /**
-     * 模式A：系统档位 → AVRCP 绝对音量。
+     * 系统档位 → AVRCP 绝对音量。
      * 使用 [Avrcp.curveToAbsoluteVolume] 可选曲线映射，与预览完全一致。
+     *
+     * 入口只挂载一次；当前是否按模式A 处理由 [VolumeMode] 在下方判定，故日志不写死模式。
      */
     private fun systemToAvrcp(volumeManager: Class<*>, chain: HookChain): Any? {
-        XposedKit.logOnce("hook-bt-toavrcp", "HOOK fired: systemToAvrcpVolume (modeA)")
+        XposedKit.logOnce("hook-bt-toavrcp", "HOOK fired: systemToAvrcpVolume")
         val result = chain.proceed()
         try {
             val config = XposedKit.readConfig(XposedKit.bluetoothContext())

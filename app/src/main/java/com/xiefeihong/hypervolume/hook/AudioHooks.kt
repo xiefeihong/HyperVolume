@@ -77,11 +77,11 @@ object AudioHooks {
     /** 属性回调内现场刷新的节流间隔（毫秒）：开机早期属性读取高频。 */
     private const val OVERRIDE_REFRESH_THROTTLE_MS = 1000L
 
-    /** 按键 adjust 最小有效增量占档位数的比例：|delta| 小于 max(2, levels*此比例) 视为噪声交回系统。 */
-    private const val KEY_DELTA_MIN_RATIO = 0.03f
-
     /** 判定「拖动 vs 按键」的相邻媒体变更最小间隔：小于此值视为拖动密集连发，放行不动。 */
     private const val KEY_SNAP_GAP_NS = 450_000_000L
+
+    /** modeB 阻断日志的静默窗口：最后一次阻断之后安静这么久就汇总成一条计数。 */
+    private const val BLOCKED_SUMMARY_IDLE_MS = 3_000L
 
     /** 开机校正时间点（毫秒）：覆盖系统服务逐步就绪的过程。 */
     private val BOOT_CORRECTION_DELAYS_MS = longArrayOf(2_000L, 5_000L, 15_000L, 30_000L, 60_000L)
@@ -93,6 +93,10 @@ object AudioHooks {
     /** system_server 最近一次见到的 AudioService 实例。 */
     @Volatile
     private var sAudioService: Any? = null
+
+    /** 本次开机是否已确认实例档位与配置一致：是则后续 5 个校正点不再重复打「已验证」日志。 */
+    @Volatile
+    private var sBootCorrectionConfirmed = false
 
     /**
      * 属性拦截缓存：ro.config.media_vol_steps 的返回值（10~100）；-1 表示
@@ -113,8 +117,32 @@ object AudioHooks {
     @Volatile
     private var sLastOverrideRefresh = 0L
 
-    /** 日志节流：避免音量拖动时高频刷屏。 */
-    private var sLastBlockedIndex = -1
+    /** 日志节流：本次突发内已拦下的 AVRCP 转发次数（含首条）。 */
+    @Volatile
+    private var sBlockedCount = 0
+
+    /** 日志节流：本次突发首条阻隔的时刻（毫秒）。 */
+    @Volatile
+    private var sBlockedStartMs = 0L
+
+    /** 日志节流：最近一次阻断的时刻（毫秒）。 */
+    @Volatile
+    private var sBlockedLastMs = 0L
+
+    /** 日志节流：最后一次被拦下的档位（汇总里带上，便于核对阻断量级）。 */
+    @Volatile
+    private var sBlockedLastIndex = -1
+
+    /** 日志节流：本次开机是否已打过首条阻断日志（此后只出汇总）。 */
+    @Volatile
+    private var sBlockedFirstLogged = false
+
+    private val BLOCKED_LOCK = Any()
+
+    /** 汇总延时任务：阻断静默 [BLOCKED_SUMMARY_IDLE_MS] 后在主线程输出一条计数。 */
+    private val sBlockedHandler by lazy { Handler(Looper.getMainLooper()) }
+
+    private val sBlockedFlush = Runnable { flushBlockedSummary() }
 
     private var sPropHitLogged = false
 
@@ -323,9 +351,12 @@ object AudioHooks {
         maxStreamVolumes[Prefs.STREAM_MUSIC_INDEX] = mediaSteps
         // 属性拦截缓存同步（幂等）
         sMediaStepsOverride = mediaSteps
-        XposedKit.log(
-            "media steps: ${sOriginalMaxStreamVolumes!![Prefs.STREAM_MUSIC_INDEX]}" +
-                " -> $mediaSteps (others untouched)",
+        // 开机阶段 createStreamStates 会多次进来，同一次「旧值 -> 目标值」只记一条；
+        // 键里带两端的值，真正的档位变化照常输出。
+        val before = sOriginalMaxStreamVolumes!![Prefs.STREAM_MUSIC_INDEX]
+        XposedKit.logOnce(
+            "media-steps:$before->$mediaSteps",
+            "media steps: $before -> $mediaSteps (others untouched)",
         )
     }
 
@@ -335,10 +366,11 @@ object AudioHooks {
      * 校验并校正媒体流实例档位（`mIndexMax` = 档位数×10），返回目标档位数。
      * 调用方：构造完成、开机延迟校正、界面读取自愈。
      *
+     * @param logIfVerified 一致时是否打「已验证」日志；开机校正的重复重试传 false 收敛噪声
      * @return 目标档位数；无配置 / 已停用时返回 -1；实例字段读写失败抛出，由调用方 Hooker 统一捕获
      */
     @Throws(Exception::class)
-    private fun syncMediaStreamMax(audioService: Any, tag: String): Int {
+    private fun syncMediaStreamMax(audioService: Any, tag: String, logIfVerified: Boolean = true): Int {
         val config = XposedKit.readConfig(XposedKit.systemServerContext(audioService))
         if (config == null) {
             XposedKit.log("$tag: no config, keep system defaults")
@@ -358,7 +390,9 @@ object AudioHooks {
         }
         if (current == target) {
             sVerifiedMaxSteps = target
-            XposedKit.log("$tag: media max verified $target")
+            if (logIfVerified) {
+                XposedKit.log("$tag: media max verified $target")
+            }
             return target
         }
         if (correctMediaStreamMax(audioService, target)) {
@@ -448,8 +482,13 @@ object AudioHooks {
             if (audioService == null) {
                 XposedKit.logError("boot correction: audio service unavailable")
             } else {
-                XposedKit.log("boot correction: service=" + audioService.javaClass.name)
-                syncMediaStreamMax(audioService, "boot correction")
+                // 5 个延迟点只留首条：首次把服务类名与校验结果并成一行，后续重试仅在档位
+                // 真的不一致（会被 syncMediaStreamMax 自己记 corrected）时才发声。
+                val tag = "boot correction (" + audioService.javaClass.simpleName + ")"
+                val target = syncMediaStreamMax(audioService, tag, logIfVerified = !sBootCorrectionConfirmed)
+                if (target >= 1) {
+                    sBootCorrectionConfirmed = true
+                }
             }
         } catch (t: Throwable) {
             XposedKit.logError("boot correction failed: $t")
@@ -557,15 +596,70 @@ object AudioHooks {
             if (config == null || !config.suppressBtAbsoluteVolume()) {
                 return chain.proceed()
             }
-            if (index != sLastBlockedIndex) {
-                sLastBlockedIndex = index
-                XposedKit.log("modeB: block avrcp volume forward (index=$index)")
-            }
+            recordBlockedForward(index)
             null
         } catch (t: Throwable) {
             XposedKit.logError("postAvrcpVolume hook failed: $t")
             chain.proceed()
         }
+    }
+
+    /**
+     * 记录一次 AVRCP 转发阻断，按「首条 + 静默汇总」输出日志。
+     *
+     * 旧实现按档位变化去重（`index != sLastBlockedIndex`），而拖动时档位持续变化：
+     * 实测一次音量手势就打出几十条，整份模块日志 64/98 行都是这一句。现在每次开机
+     * 只留首条，之后按 [BLOCKED_SUMMARY_IDLE_MS] 的静默窗口汇总成一条计数。
+     */
+    private fun recordBlockedForward(index: Int) {
+        val now = System.currentTimeMillis()
+        val pending = ArrayList<String>(2)
+        var schedule = false
+        synchronized(BLOCKED_LOCK) {
+            // 兜底：延时任务被丢（主线程卡顿/异常）时，由下一条阻断补上一次未输出的汇总。
+            // 只有 1 次时不补——那一次已经由首条日志或上一次汇总覆盖，否则会出现
+            // 「blocked 1 forwards in 0ms」这种噪声。
+            if (sBlockedCount > 1 && now - sBlockedLastMs >= BLOCKED_SUMMARY_IDLE_MS) {
+                blockedSummaryText(sBlockedCount, sBlockedLastMs - sBlockedStartMs, sBlockedLastIndex)
+                    ?.let { pending += it }
+                sBlockedCount = 0
+            }
+            sBlockedLastIndex = index
+            sBlockedLastMs = now
+            if (sBlockedCount == 0) {
+                sBlockedStartMs = now
+            }
+            sBlockedCount++
+            if (sBlockedFirstLogged) {
+                schedule = true
+            } else {
+                // 首条不与它自身的汇总重复：本突发从第二条阻断才开始计时汇总
+                sBlockedFirstLogged = true
+                pending += blockedFirstText(index)
+            }
+        }
+        pending.forEach { XposedKit.log(it) }
+        if (schedule) {
+            // 延时任务需在主线程投递：Hook 线程是 Binder 线程，不能直接起 Handler
+            runCatching {
+                sBlockedHandler.removeCallbacks(sBlockedFlush)
+                sBlockedHandler.postDelayed(sBlockedFlush, BLOCKED_SUMMARY_IDLE_MS)
+            }.onFailure { XposedKit.logErrorOnce("blocked-flush", "modeB summary schedule failed: $it") }
+        }
+    }
+
+    /** 输出并清零本次突发的阻断计数（静默窗口到期时由延时任务调用）。 */
+    private fun flushBlockedSummary() {
+        val text = synchronized(BLOCKED_LOCK) {
+            val summary = if (sBlockedCount <= 1) {
+                null
+            } else {
+                blockedSummaryText(sBlockedCount, sBlockedLastMs - sBlockedStartMs, sBlockedLastIndex)
+            }
+            sBlockedCount = 0
+            summary
+        } ?: return
+        XposedKit.log(text)
     }
 
     /**
@@ -700,9 +794,10 @@ object AudioHooks {
             // 【防误伤/防振荡】真实按键相对当前是一整步（~7%），而 SystemUI 对话框同步/取整写入
             // 的 Δ 只有 0/±1。Δ 过小一律视为系统回写、原样放行——否则会把同步写入吸附
             // 成反向掉档并与 SystemUI 相互回写振荡（实测按音量+反而 40→39 的根因）。
+            // 上界同理：拖动首条没有上一条媒体变更可比，会漏过上面的密集判据；
+            // 实测 `request 71, cur 16` 被吸附成 20，把用户从 71% 拉回 20%。
             val delta = index - current
-            val minKeyDelta = maxOf(2, Math.round(levels * KEY_DELTA_MIN_RATIO))
-            if (Math.abs(delta) < minKeyDelta) {
+            if (!isKeyPressDelta(delta, levels, segs)) {
                 return chain.proceed()
             }
             // 相对「当前档位」吸附到相邻的一个网格档（与 adjustStreamVolume 接管一致），
@@ -718,9 +813,11 @@ object AudioHooks {
             }
             if (target != sLastSnapLogged) {
                 sLastSnapLogged = target
+                // 明确区分「系统请求的档位」与「被替换成的档位」，避免被读成 target -> target；
+                // delta/step 一并带上，下次出现异常跳变可直接判定是否误伤
                 XposedKit.log(
-                    "post-drag key snap: media $index -> $target (cur=$current, " +
-                        (if (raise) "up" else "down") + ")/$levels",
+                    "snap ${if (raise) "up" else "down"}: request $index, cur $current -> $target" +
+                        " (levels=$levels, segs=$segs, delta=$delta, step=${gridStepOf(levels, segs)})",
                 )
             }
             return chain.proceedWithReplaced(1, target)
@@ -926,16 +1023,9 @@ object AudioHooks {
             }
             if (!sAdjustFiredLogged) {
                 sAdjustFiredLogged = true
-                XposedKit.log(
-                    "key step applied: " + if (raise) "RAISE " else "LOWER " +
-                        "$oldIndex -> $newIndex levels=$maxSteps segs=$keySteps" +
-                        " (~${Math.round(newIndex * 100.0 / maxSteps)}%)",
-                )
+                XposedKit.log(keyStepLog(raise, oldIndex, newIndex, maxSteps, keySteps, first = true))
             } else {
-                XposedKit.log(
-                    "key step: " + if (raise) "+" else "-" + (newIndex - oldIndex) +
-                        " $oldIndex -> $newIndex",
-                )
+                XposedKit.log(keyStepLog(raise, oldIndex, newIndex, maxSteps, keySteps, first = false))
             }
             invokeSetStreamVolume(audioService, streamType, newIndex, flags)
             // 跳过原实现（它自带 ±1 或按 maxIndex/15 的步进），避免双算。
@@ -1044,3 +1134,58 @@ object AudioHooks {
         return proceed(newArgs)
     }
 }
+
+/**
+ * 音量键步进的日志文本（纯函数，供单测）。
+ *
+ * 增量统一用 `abs(delta)` 加单次符号拼接。旧实现写成
+ * `"key step: " + if (raise) "+" else "-" + (newIndex - oldIndex)`，Kotlin 的 `+` 优先级使
+ * `else` 分支把后面的字符串一起吞掉：升档只剩 `+`、降档因 delta 自带负号变成 `--4`。
+ */
+internal fun keyStepLog(
+    raise: Boolean, oldIndex: Int, newIndex: Int, levels: Int, segs: Int, first: Boolean,
+): String {
+    val delta = newIndex - oldIndex
+    val signed = (if (delta >= 0) "+" else "-") + Math.abs(delta)
+    if (!first) {
+        return "key step: $oldIndex -> $newIndex ($signed)"
+    }
+    val percent = Math.round(newIndex * 100.0 / levels)
+    return "key step applied: ${if (raise) "RAISE" else "LOWER"} $oldIndex -> $newIndex ($signed)" +
+        " levels=$levels segs=$segs (~$percent%)"
+}
+
+/** 吸附网格的步长（档位数 / 分段数），至少 1。 */
+internal fun gridStepOf(levels: Int, segs: Int): Int =
+    if (segs <= 0) 1 else maxOf(1, levels / segs)
+
+/**
+ * 「拖后按键」吸附的 Δ 门限（纯函数，供单测）。
+ *
+ * 下界 [KEY_DELTA_MIN_RATIO]：Δ≈0/±1 是 SystemUI 对话框同步/取整回写，吸附会与之互相回写振荡。
+ * 上界 2 个网格步：一次按音量键恰好跳 1 段，超过两段只可能是拖动——而拖动的**首条**没有
+ * 上一条媒体变更可比，会漏过 `KEY_SNAP_GAP_NS` 密集判据（实测 `request 71, cur 16` 被吸附
+ * 成 20，把音量从 71% 拉回 20%）。
+ */
+internal fun isKeyPressDelta(delta: Int, levels: Int, segs: Int): Boolean {
+    if (levels <= 0 || segs <= 0 || segs >= levels) {
+        return false
+    }
+    val abs = Math.abs(delta)
+    val minDelta = maxOf(2, Math.round(levels * KEY_DELTA_MIN_RATIO))
+    return abs >= minDelta && abs <= 2 * gridStepOf(levels, segs)
+}
+
+/** modeB 阻断日志的首条（每次开机仅一条）。 */
+internal fun blockedFirstText(index: Int): String =
+    "modeB: block avrcp volume forward (first, index=$index)"
+
+/**
+ * modeB 阻断日志的静默汇总：一次突发（拖动）结束后只留这一条计数。
+ * 只有攒到 2 次以上才值得单独记（1 次已被首条日志覆盖）。
+ */
+internal fun blockedSummaryText(count: Int, spanMs: Long, lastIndex: Int): String? =
+    if (count <= 1) null else "modeB: blocked $count forwards in ${spanMs}ms (last=$lastIndex)"
+
+/** 按键 adjust 最小有效增量占档位数的比例：|delta| 小于 max(2, levels*此比例) 视为噪声交回系统。 */
+private const val KEY_DELTA_MIN_RATIO = 0.03f

@@ -1,5 +1,7 @@
 package com.xiefeihong.hypervolume.ui.screen
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
@@ -47,27 +49,34 @@ fun AppDialogs(spec: DialogSpec, vm: HyperVolumeViewModel) {
             summary = spec.plan.message,
             onDismissRequest = dismiss,
         ) {
-            // 旧实现的三个处理入口，纵向排布（推荐项用主按钮）
-            PrimaryButton(
-                text = SaveEngine.Messages.resolveEnable,
-                onClick = { vm.onBlockedChoice(BlockedChoice.ENABLE_STEPS) },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            )
-            SecondaryButton(
-                text = SaveEngine.Messages.resolveDefaultMode,
-                onClick = { vm.onBlockedChoice(BlockedChoice.DEFAULT_MODE) },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-            SecondaryButton(
-                text = SaveEngine.Messages.resolveDefaultSteps,
-                onClick = { vm.onBlockedChoice(BlockedChoice.DEFAULT_STEPS) },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-            SecondaryButton(
-                text = SaveEngine.Messages.cancel,
-                onClick = dismiss,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            )
+            // 旧实现的四个处理入口，纵向排布（推荐项用主按钮）。
+            // 间距与 [DialogButtons] 对齐：外层留 16dp/12dp，按钮之间统一 8dp——
+            // 旧写法把 padding 逐个加在按钮上（首个只给了 horizontal），导致第一、二个之间只有 4dp。
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                PrimaryButton(
+                    text = SaveEngine.Messages.resolveEnable,
+                    onClick = { vm.onBlockedChoice(BlockedChoice.ENABLE_STEPS) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                SecondaryButton(
+                    text = SaveEngine.Messages.resolveDefaultMode,
+                    onClick = { vm.onBlockedChoice(BlockedChoice.DEFAULT_MODE) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                SecondaryButton(
+                    text = SaveEngine.Messages.resolveDefaultSteps,
+                    onClick = { vm.onBlockedChoice(BlockedChoice.DEFAULT_STEPS) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                SecondaryButton(
+                    text = SaveEngine.Messages.cancel,
+                    onClick = dismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
 
         is DialogSpec.Restart -> OverlayDialog(
