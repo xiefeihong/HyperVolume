@@ -116,7 +116,7 @@
     <string name="push_fail">Failed to write the system configuration; make sure su is granted</string>
     <string name="push_verify_fail">The configuration was written, but the read-back does not match what was saved. Retry; if it persists, check the debug info.</string>
     <string name="auto_save_fail">Auto-save failed: the system configuration could not be written, make sure su is granted</string>
-    <string name="save_done">Saved; no restart required.</string>
+    <string name="save_done">Saved.</string>
     <string name="save_done_title">Saved</string>
     <string name="restart_now">Restart now</string>
     <string name="restart_later">Later</string>
@@ -193,15 +193,15 @@
 
     <!-- ==================== 模块日志页 ==================== -->
     <string name="log_title">Module log (HyperVolume)</string>
-    <string name="log_empty">No module log found. Possible reasons:\n• The module is not enabled in LSPosed\n• The system framework / Bluetooth has not been restarted since installing this build (hooks load only at process start)\n• This view shows all levels; the LSPosed log page records errors (E) only</string>
+    <string name="log_empty">No module log found. Possible reasons:\n
+• The module is not enabled in LSPosed\n
+• The system framework has not been restarted since installing this build (hooks load only at process start)\n
+• This view shows all levels; the LSPosed log page records errors (E) only</string>
     <string name="log_sec_sys">[System framework log]\n</string>
-    <string name="log_sec_bt">[Bluetooth log]\n</string>
-    <string name="log_sec_lspd">[LSPosed log]\n</string>
-    <string name="log_sec_logcat">[logcat]\n</string>
     <string name="log_none">No log found.\n</string>
     <string name="log_check_paths">Check whether these files exist:\n</string>
     <string name="log_loading">Reading logs…</string>
-    <string name="log_page_summary">Module logs from system_server, Bluetooth and LSPosed</string>
+    <string name="log_page_summary">Module logs from system_server</string>
     <string name="refresh_summary">Re-detect root, LSPosed and the current volume steps</string>
     <string name="logs_cleared">Log files cleared</string>
     <string name="action_failed">Operation failed: %1$s</string>
@@ -239,7 +239,10 @@
     <string name="backup_import_root">Importing a backup requires root access (the configuration can only be written back into the system)</string>
     <string name="backup_imported_restart">Backup imported and written to the system; a restart is required.</string>
     <string name="backup_scope_title">Backup contents</string>
-    <string name="backup_scope_body">• Active configuration (this module’s Settings.Global key — the app’s only copy, JSON)\n• System native step count and the restore-default acknowledgement flag\n• UI preferences: language, colour, etc.\nImporting requires root access (the configuration can only go back into the system). Bluetooth pairing data and the LSPosed enable state are not included.</string>
+    <string name="backup_scope_body">• Active configuration (this module’s Settings.Global key — the app’s only copy, JSON)\n
+• System native step count and the restore-default acknowledgement flag\n
+• UI preferences: language, colour, etc.\n
+Importing requires root access (the configuration can only go back into the system). Bluetooth pairing data and the LSPosed enable state are not included.</string>
 
     <!-- ==================== 故障排除 / 调试信息 ==================== -->
     <string name="debug_info">Debug info</string>
@@ -271,8 +274,6 @@
     <string name="landing_no_root">Requires Root</string>
     <string name="landing_global">Global settings</string>
     <string name="landing_mirror">Config mirror</string>
-    <string name="perf_log_title">Performance log</string>
-    <string name="perf_log_summary">Record an extra timing log on every save (for troubleshooting; adds one root call)</string>
 
     <!-- ==================== 关于页 ==================== -->
     <string name="about_title">About</string>
@@ -310,5 +311,13 @@
     <string name="license_libxposed_summary">Apache License 2.0 · modern LSPosed API</string>
 
     <!-- ==================== 使用说明（关于页） ==================== -->
-    <string name="guide_text" formatted="false">1. Enable this module in LSPosed, then restart the system framework (the button on the home page does it).\n2. Media volume steps: 10–100 (HyperOS ships 15 natively). A step is one distinguishable position on the volume bar and only affects the media stream; after changing steps tap “Restart system framework” — a short black screen is normal. The volume-key increment (10–29 segments) sets how many steps one press skips (about steps ÷ segments) and affects only the keys, not the on-screen slider.\n3. Absolute mode: Bluetooth keeps absolute mapping (steps map through the curve to AVRCP 0–127); step 1 = minimum, top step = maximum.\n4. Relative mode (best fix for quiet low volume): absolute volume is disabled and the phone attenuates the signal with a software curve while the headset stays at its own hardware volume.\n5. Default mode: the step count is untouched and no custom curve is added — system steps are split linearly inside the chosen min/max, both ends anchor to min/max and the middle keeps the ROM native loudness curve (full range = passthrough); switch the chart axis (dB linear / perceived loudness) to inspect that native curve.\n6. The device tabs switch between Bluetooth / wired / speaker and each keeps its own mode and range (the app focuses the current output on launch). Absolute is Bluetooth-only; relative attenuates in the system for all three devices within their own range; default remaps that device’s steps linearly inside min/max keeping the ROM curve. The step count and key increment are global.\n7. Applying: tap Save and confirm the restart prompt. Mode or range changes need “Restart Bluetooth”; step changes need “Restart system framework” (the key increment applies immediately).\n8. Back to stock: turn off “Enable module” under Settings → General, tap “Save changes” and restart the system framework as prompted; to erase what this app wrote use Settings → Backup → Clear data. You can also disable the module in LSPosed and reboot.\n9. Troubleshooting: check the status card for the effective step count, and open Settings → Diagnostics → Module log for the module’s own log.</string>
+    <string name="guide_text" formatted="false">1. Enable this module in LSPosed, then restart the system framework (the button on the home page does it).\n
+2. Media volume steps: 10–100 (HyperOS ships 15 natively). A step is one distinguishable position on the volume bar and only affects the media stream; after changing steps tap “Restart system framework” — a short black screen is normal. The volume-key increment (10–29 segments) sets how many steps one press skips (about steps ÷ segments) and affects only the keys, not the on-screen slider.\n
+3. Absolute mode: Bluetooth keeps absolute mapping (steps map through the curve to AVRCP 0–127); step 1 = minimum, top step = maximum.\n
+4. Relative mode (best fix for quiet low volume): absolute volume is disabled and the phone attenuates the signal with a software curve while the headset stays at its own hardware volume.\n
+5. Default mode: the step count is untouched and no custom curve is added — system steps are split linearly inside the chosen min/max, both ends anchor to min/max and the middle keeps the ROM native loudness curve (full range = passthrough); switch the chart axis (dB linear / perceived loudness) to inspect that native curve.\n
+6. The device tabs switch between Bluetooth / wired / speaker and each keeps its own mode and range (the app focuses the current output on launch). Absolute is Bluetooth-only; relative attenuates in the system for all three devices within their own range; default remaps that device’s steps linearly inside min/max keeping the ROM curve. The step count and key increment are global.\n
+7. Applying: tap Save and confirm the restart prompt. Mode or range changes need “Restart Bluetooth”; step changes need “Restart system framework” (the key increment applies immediately).\n
+8. Back to stock: turn off “Enable module” under Settings → General, tap “Save changes” and restart the system framework as prompted; to erase what this app wrote use Settings → Backup → Clear data. You can also disable the module in LSPosed and reboot.\n
+9. Troubleshooting: check the status card for the effective step count, and open Settings → Diagnostics → Module log for the module’s own log.</string>
 </resources>

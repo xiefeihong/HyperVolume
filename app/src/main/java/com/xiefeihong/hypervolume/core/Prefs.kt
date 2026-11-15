@@ -42,11 +42,6 @@ object Prefs {
     /** 上次烘进开机脚本的媒体档位数（见 [KEY_BOOT_SCRIPT_ACTIVE]）。 */
     const val KEY_BOOT_SCRIPT_STEPS = "boot_script_steps"
 
-    /**
-     * 性能日志开关：开启时一次保存的 `pushConfig` 额外计一段耗时并写一条 `push perf` 日志
-     * （多一次 root 追加，仅排障时打开）。默认关。
-     */
-    const val KEY_PERF_LOG = "perf_log"
 
     /**
      * 界面语言偏好：`system` / `zh` / `en`（见 app 层 [AppLanguage] 的 tag）。
@@ -97,6 +92,12 @@ object Prefs {
     /** 模式A 下绝对音量范围（0~127）的默认上下限。 */
     const val ABS_VOLUME_MIN_DEFAULT = 0
     const val ABS_VOLUME_MAX_DEFAULT = AVRCP_MAX_VOLUME
+
+    /** 蓝牙模式A 最小音量默认值（AVRCP 0~127 口径）。 */
+    const val BT_ABS_MIN_DEFAULT = 7
+
+    /** 蓝牙模式B 最小音量默认值（系统档位口径）。 */
+    const val BT_SW_MIN_DEFAULT = 3
 
     /** 媒体音量级数的可选范围（10~100）。 */
     const val MEDIA_STEPS_MIN = 10

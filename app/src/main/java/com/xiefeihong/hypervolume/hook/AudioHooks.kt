@@ -699,6 +699,21 @@ object AudioHooks {
             "key step: ${audioService.name}#$METHOD_ADJUST_STREAM_VOLUME hooked: $hooked" +
                 if (hooked == 0) " (keys routed elsewhere; step stays default)" else "",
         )
+        // 冷启动加固：HyperOS 的 MiAudioService 若自有 adjustStreamVolume override，
+        // 基类 hook 拦不到子类派发（实测冷启动偶发回落 ROM 默认 max/15 步进）。
+        // 仅当子类确实声明了该方法时补挂，避免与基类 hook 重复拦截。
+        try {
+            val mi = param.hostClassLoader!!.loadClass(XposedKit.MI_AUDIO_SERVICE_CLASS)
+            val declares = mi.declaredMethods.any { it.name == METHOD_ADJUST_STREAM_VOLUME }
+            if (declares) {
+                val miHooked = param.hookAllNamed(mi, METHOD_ADJUST_STREAM_VOLUME) { chain ->
+                    adjustStreamVolume(chain)
+                }
+                XposedKit.log("key step: ${mi.name}#$METHOD_ADJUST_STREAM_VOLUME hooked: $miHooked (override)")
+            }
+        } catch (t: Throwable) {
+            // 非 HyperOS 或类不存在：基类 hook 已足够，忽略。
+        }
     }
 
     /**
@@ -999,8 +1014,17 @@ object AudioHooks {
             // HyperOS 音量键可能走 AudioService$AudioServiceBinderWrapper（其上无 getStreamMaxVolume 等
             // 方法），故优先用真正的 AudioService 实例读写音量；缺失时回退到 chain.instance。
             val audioService = sAudioService ?: chain.instance
-            val config = XposedKit.readConfig(XposedKit.systemServerContext(audioService))
-            if (config == null || !config.remapActive) {
+            var config = XposedKit.readConfig(XposedKit.systemServerContext(audioService))
+            if (config == null) {
+                // 冷启动按键瞬间 SettingsProvider/缓存可能未就绪：同步直读镜像兜底一次，
+                // 仍读不到才交回系统（并留一条诊断，便于下次冷启动定位）。
+                config = XposedKit.readConfigFromMirror()
+                if (config == null) {
+                    XposedKit.logOnce("key-step-no-config", "key step skipped: config not readable at press time")
+                    return chain.proceed()
+                }
+            }
+            if (!config.remapActive) {
                 return chain.proceed()
             }
             val keySteps = Prefs.clampKeySteps(config.keySteps)

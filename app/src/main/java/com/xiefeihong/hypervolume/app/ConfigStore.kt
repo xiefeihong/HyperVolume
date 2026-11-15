@@ -106,15 +106,6 @@ class ConfigStore(context: Context) {
             .commit()
     }
 
-    // ==================== 性能日志开关 ====================
-
-    /** 性能日志开关：开启时一次保存额外计一段耗时并写一条 `push perf` 模块日志（默认关）。 */
-    var perfLogEnabled: Boolean
-        get() = prefs.getBoolean(Prefs.KEY_PERF_LOG, false)
-        set(value) {
-            prefs.edit().putBoolean(Prefs.KEY_PERF_LOG, value).apply()
-        }
-
     // ==================== 系统全局设置只读（无需 root） ====================
 
     /**
@@ -149,13 +140,13 @@ class ConfigStore(context: Context) {
         // 这样「默认回落值」也能无损往返（写入后回读必然相等）。
         val absolute = if (withAbsolute) {
             Range(
-                defaultMinAbs(), Prefs.AVRCP_MAX_VOLUME,
+                Prefs.BT_ABS_MIN_DEFAULT, Prefs.AVRCP_MAX_VOLUME,
                 defaultCurveType(VolumeMode.ABSOLUTE),
             )
         } else {
             null
         }
-        val software = Range(0, Prefs.MEDIA_STEPS_MAX, defaultCurveType(VolumeMode.SOFTWARE))
+        val software = Range(Prefs.BT_SW_MIN_DEFAULT, Prefs.MEDIA_STEPS_MAX, defaultCurveType(VolumeMode.SOFTWARE))
         val default = Range(0, Prefs.MEDIA_STEPS_MAX, defaultCurveType(VolumeMode.SOFTWARE))
         return DeviceConfig(Prefs.BT_MODE_DEFAULT, absolute, software, default)
     }
@@ -163,10 +154,6 @@ class ConfigStore(context: Context) {
     /** 模式默认曲线：绝对音量用对数增强拉开低档间距；相对音量用线性区间。 */
     private fun defaultCurveType(mode: VolumeMode): Int =
         if (mode == VolumeMode.SOFTWARE) Prefs.CURVE_LINEAR else Prefs.CURVE_TYPE_DEFAULT
-
-    /** 模式默认最小音量＝AVRCP 满量程 × 可闻下限比例。 */
-    private fun defaultMinAbs(): Int =
-        Prefs.clampAbs((Prefs.AVRCP_MAX_VOLUME * Avrcp.MIN_VOLUME_FLOOR_RATIO).roundToInt())
 
     companion object {
 

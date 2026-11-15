@@ -206,6 +206,17 @@ class VolumeConfigTest {
         assertNotNull(back)
         assertEquals(Prefs.BT_MODE_DEFAULT, back!!.modeFor(OutputDevice.BT))
         assertEquals(FALLBACK_ABSOLUTE, back.bluetooth.absolute)
+        assertEquals(Prefs.BT_SW_MIN_DEFAULT, back.bluetooth.software!!.min)
+    }
+
+    /** v1.1.8：蓝牙默认最小音量 模式A=7 / 模式B=3（外放/有线仍为 0）。 */
+    @Test
+    fun bluetoothDefaultMinVolumes() {
+        val d = VolumeConfig.DEFAULT
+        assertEquals(Prefs.BT_ABS_MIN_DEFAULT, d.bluetooth.absolute!!.min)
+        assertEquals(Prefs.BT_SW_MIN_DEFAULT, d.bluetooth.software!!.min)
+        assertEquals(0, d.speaker.software!!.min)
+        assertEquals(0, d.wired.software!!.min)
     }
 
     @Test
@@ -326,9 +337,9 @@ class VolumeConfigTest {
     }
 
     private companion object {
-        /** 模式A 范围缺失时的兜底（AVRCP 满量程 + 默认曲线）。 */
+        /** 模式A 范围缺失时的兜底（蓝牙默认最小音量 [Prefs.BT_ABS_MIN_DEFAULT] + 默认曲线）。 */
         val FALLBACK_ABSOLUTE = Range(
-            Prefs.ABS_VOLUME_MIN_DEFAULT, Prefs.ABS_VOLUME_MAX_DEFAULT, Prefs.CURVE_TYPE_DEFAULT,
+            Prefs.BT_ABS_MIN_DEFAULT, Prefs.ABS_VOLUME_MAX_DEFAULT, Prefs.CURVE_TYPE_DEFAULT,
         )
     }
 }

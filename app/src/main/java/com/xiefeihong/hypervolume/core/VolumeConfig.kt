@@ -263,6 +263,16 @@ class VolumeConfig(
         /** 默认范围的兜底：满量程直通（min=0、max=最大档位数），curve 对默认无效。 */
         private val DEFAULT_FALLBACK_RANGE = Range(0, Prefs.MEDIA_STEPS_MAX, Prefs.CURVE_LINEAR)
 
+        /** 蓝牙模式A 兜底范围：最小音量默认 [Prefs.BT_ABS_MIN_DEFAULT]。 */
+        private val BT_FALLBACK_ABS = Range(
+            Prefs.BT_ABS_MIN_DEFAULT, Prefs.ABS_VOLUME_MAX_DEFAULT, Prefs.CURVE_TYPE_DEFAULT,
+        )
+
+        /** 蓝牙模式B 兜底范围：最小音量默认 [Prefs.BT_SW_MIN_DEFAULT]。 */
+        private val BT_FALLBACK_SW = Range(
+            Prefs.BT_SW_MIN_DEFAULT, Prefs.MEDIA_STEPS_MAX, Prefs.CURVE_LINEAR,
+        )
+
         /** 共享数据类不得引 Hook 框架类（App 侧会因 compileOnly libxposed 加载失败），故用框架级 Log。 */
         private const val LOG_TAG = "HyperVolume"
 
@@ -272,7 +282,7 @@ class VolumeConfig(
             // 外放 / 有线没有模式A 维度，置 null 与持久化口径一致；蓝牙必须给兜底范围供 Hook 直接用。
             DeviceConfig(Prefs.BT_MODE_DEFAULT, null, FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE),
             DeviceConfig(Prefs.BT_MODE_DEFAULT, null, FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE),
-            DeviceConfig(Prefs.BT_MODE_DEFAULT, FALLBACK_RANGE, FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE),
+            DeviceConfig(Prefs.BT_MODE_DEFAULT, BT_FALLBACK_ABS, BT_FALLBACK_SW, DEFAULT_FALLBACK_RANGE),
         )
 
         /**
@@ -321,22 +331,26 @@ class VolumeConfig(
 
         /** 模式A 范围的读回初值：仅蓝牙有该维度，其余设备为 null（与写出侧同口径）。 */
         private fun fallbackAbs(withAbsolute: Boolean): Range? =
-            if (withAbsolute) FALLBACK_RANGE else null
+            if (withAbsolute) BT_FALLBACK_ABS else null
 
         /** 读取指定 name 的设备；缺失时给出默认（直通 + 兜底范围）。 */
         private fun readDevice(devices: JSONObject?, name: String, withAbsolute: Boolean): DeviceConfig {
             val el = devices?.optJSONObject(name) ?: return DeviceConfig(
-                Prefs.BT_MODE_DEFAULT, fallbackAbs(withAbsolute), FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE,
+                Prefs.BT_MODE_DEFAULT, fallbackAbs(withAbsolute),
+                if (withAbsolute) BT_FALLBACK_SW else FALLBACK_RANGE, DEFAULT_FALLBACK_RANGE,
             )
             val mode = normalizeMode(intField(el, KEY_MODE, Prefs.BT_MODE_DEFAULT), withAbsolute)
             // 模式A 只对蓝牙持久化：非蓝牙没有 "a" 键，读回必须与写出侧一样归一为 null，
             // 否则这个不参与序列化的字段会让 equals 把两份等值配置判成不同（写入成功却校验失败）。
             val absolute = if (withAbsolute) {
-                readRange(el, KEY_ABSOLUTE, FALLBACK_RANGE, Prefs.AVRCP_MAX_VOLUME)
+                readRange(el, KEY_ABSOLUTE, BT_FALLBACK_ABS, Prefs.AVRCP_MAX_VOLUME)
             } else {
                 null
             }
-            val software = readRange(el, KEY_SOFTWARE, FALLBACK_RANGE, Prefs.MEDIA_STEPS_MAX)
+            val software = readRange(
+                el, KEY_SOFTWARE,
+                if (withAbsolute) BT_FALLBACK_SW else FALLBACK_RANGE, Prefs.MEDIA_STEPS_MAX,
+            )
             val defaultRange = readRange(el, KEY_DEFAULT, DEFAULT_FALLBACK_RANGE, Prefs.MEDIA_STEPS_MAX)
             return DeviceConfig(mode, absolute, software, defaultRange)
         }

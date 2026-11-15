@@ -92,19 +92,44 @@ object TestText {
     fun argSpecs(text: String): List<String> = Regex("%(\\d+)\\$[ds]").findAll(text).map { it.value }.toList().sorted()
 
     /**
-     * 值里含**真实换行**的键（按语言分组）。
+     * 值里含**未跟在 `\n` 转义后的真实换行**的键（按语言分组）。
      *
-     * aapt2 会把未转义的多行内容折叠成单个空格，因此需要换行的文案必须写在同一物理行、
-     * 用 `\n` 转义；本项用于守住这条书写约束（单测里的 [normalize] 同样会折叠）。
+     * 书写约定：显示换行只由 `\n` 转义提供；源码中 `\n` 后紧跟一个真实回车用于排版
+     * （aapt2 会把它折叠成空格，不产生显示换行）；值末尾（最后一行）的 `\n` 不加回车；
+     * 其余位置不得出现真实换行，也不得擅自删除已有回车。本项守住这条约定。
      */
-    fun rawNewlineKeys(): Map<String, List<String>> = buildMap {
-        put("default", rawNewlineKeys(defaultFile().readText()))
-        locate("values-en/strings.xml")?.let { put("en", rawNewlineKeys(it.readText())) }
+    fun strayNewlineKeys(): Map<String, List<String>> = buildMap {
+        put("default", strayNewlineKeys(defaultFile().readText()))
+        locate("values-en/strings.xml")?.let { put("en", strayNewlineKeys(it.readText())) }
     }
 
-    private fun rawNewlineKeys(xml: String): List<String> =
+    private fun strayNewlineKeys(xml: String): List<String> =
         ENTRY.findAll(xml)
-            .filter { it.groupValues[2].contains('\n') }
+            .filter { it.groupValues[2].replace("\\n\n", "").contains('\n') }
+            .map { it.groupValues[1] }
+            .toList()
+
+    /** 值内部的 `\n` 转义后未紧跟真实回车的键（按语言分组）：末尾 `\n` 不加回车，见 [strayNewlineKeys]。 */
+    fun unbrokenEscapeKeys(): Map<String, List<String>> = buildMap {
+        put("default", unbrokenEscapeKeys(defaultFile().readText()))
+        locate("values-en/strings.xml")?.let { put("en", unbrokenEscapeKeys(it.readText())) }
+    }
+
+    private fun unbrokenEscapeKeys(xml: String): List<String> =
+        ENTRY.findAll(xml)
+            .filter { g -> Regex("\\\\n(?!\n)").findAll(g).any { it.range.last < g.length - 1 } }
+            .map { it.groupValues[1] }
+            .toList()
+
+    /** 值末尾 `\n` 后多写了源码回车的键（按语言分组）：最后一行不加回车，见 [strayNewlineKeys]。 */
+    fun trailingNewlineKeys(): Map<String, List<String>> = buildMap {
+        put("default", trailingNewlineKeys(defaultFile().readText()))
+        locate("values-en/strings.xml")?.let { put("en", trailingNewlineKeys(it.readText())) }
+    }
+
+    private fun trailingNewlineKeys(xml: String): List<String> =
+        ENTRY.findAll(xml)
+            .filter { it.groupValues[2].endsWith("\\n\n") }
             .map { it.groupValues[1] }
             .toList()
 }

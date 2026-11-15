@@ -209,11 +209,11 @@ fun ActionsSection(state: EditorState, snapshot: StatusSnapshot?, busy: Boolean,
     }
 }
 
-/** 使用说明卡。 */
+/** 使用说明卡：正文用 [BodyText]（与其他卡的正文标签同风格，主色可读）。 */
 @Composable
 fun GuideSection() {
     SectionCard(title = stringResource(R.string.sec_guide)) {
-        HintText(stringResource(R.string.guide_text))
+        BodyText(stringResource(R.string.guide_text))
     }
 }
 

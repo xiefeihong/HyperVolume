@@ -289,52 +289,28 @@ object Shell {
     /**
      * 读取模块日志。
      *
-     * 模块自写日志文件优先（不依赖 LSPosed 日志实现）：
-     * system_server → [SYS_LOG_FILE]；蓝牙进程 → [BT_LOG_FILE]（DE），为空时回退 [BT_LOG_FILE_LEGACY]（CE，旧版写入点）。
-     * 再合并 LSPosed 日志文件与 logcat 结果；全部为空时附上诊断信息。
+     * 模块日志仅展示系统框架段（v1.1.8 起不再合并蓝牙 / LSPosed / logcat）：
+     * system_server → [SYS_LOG_FILE]，被 SELinux 拦阻时回落 [SYS_LOG_FILE_FALLBACK]。
      */
     fun readModuleLogs(): String {
         val result = su(
             "echo '@SYS@'; " +
                 "tail -n 200 $SYS_LOG_FILE 2>/dev/null; " +
-                "tail -n 200 $SYS_LOG_FILE_FALLBACK 2>/dev/null; " +
-                "echo '@BT@'; " +
-                // DE 为空才看 CE：否则升级后会同时看到本次开机（DE）与上一次开机（CE 残留）的两段日志
-                "if [ -s $BT_LOG_FILE ]; then tail -n 200 $BT_LOG_FILE; " +
-                "else tail -n 200 $BT_LOG_FILE_LEGACY 2>/dev/null; fi; " +
-                "echo '@LSPD@'; grep -a -h '$LOG_MARKER' /data/adb/lspd/log/* 2>/dev/null" +
-                // modules_<时间>.log 与 verbose_<时间>.log 内容重叠（实测各 75 行）：先按整行去重再截断，
-                // 否则 150 行额度被重复内容占满，有效窗口只剩一半。
-                " | awk '!seen[\$0]++' | tail -n 150; " +
-                "echo '@LOGCAT@'; logcat -d -t 500 2>/dev/null" +
-                " | grep -a '$LOG_MARKER' | tail -n 150",
+                "tail -n 200 $SYS_LOG_FILE_FALLBACK 2>/dev/null",
         )
         val output = result.output
-        val sys = section(output, "@SYS@", "@BT@")
-        val bt = section(output, "@BT@", "@LSPD@")
-        val lspd = section(output, "@LSPD@", "@LOGCAT@")
-        val logcat = section(output, "@LOGCAT@", null)
+        val sys = section(output, "@SYS@", null)
 
         val report = StringBuilder()
         if (sys.isNotEmpty()) {
-            report.append(AppText.str(R.string.log_sec_sys)).append(sys).append("\n\n")
-        }
-        if (bt.isNotEmpty()) {
-            report.append(AppText.str(R.string.log_sec_bt)).append(bt).append("\n\n")
-        }
-        if (lspd.isNotEmpty()) {
-            report.append(AppText.str(R.string.log_sec_lspd)).append(lspd).append("\n\n")
-        }
-        if (logcat.isNotEmpty()) {
-            report.append(AppText.str(R.string.log_sec_logcat)).append(logcat)
+            report.append(AppText.str(R.string.log_sec_sys)).append(sys)
         }
 
         if (report.length == 0) {
             report.append(AppText.str(R.string.log_none))
                 .append(AppText.str(R.string.log_check_paths))
                 .append("• $SYS_LOG_FILE\n")
-                .append("• /data/adb/lspd/log/\n")
-                .append("• $BT_LOG_FILE")
+                .append("• $SYS_LOG_FILE_FALLBACK")
         }
         return sanitizeLogText(report.toString()).trim()
     }

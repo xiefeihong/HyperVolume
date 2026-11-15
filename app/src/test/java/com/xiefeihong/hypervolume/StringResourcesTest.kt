@@ -57,9 +57,14 @@ class StringResourcesTest {
     }
 
     @Test
-    fun lineBreaksAreEscapedNotRaw() {
-        // 真实换行会被 aapt2 折叠成空格，多行文案（使用说明、备份范围等）因此整段铺成一行
-        val offenders = TestText.rawNewlineKeys().filterValues { it.isNotEmpty() }
-        assertTrue("这些条目写了真实换行，应改为 \\n 转义：$offenders", offenders.isEmpty())
+    fun lineBreaksUseEscapeFollowedBySourceNewline() {
+        // 显示换行只由 \n 提供；源码中 \n 后紧跟真实回车排版（aapt2 折叠为空格、不产生显示换行），
+        // 值末尾（最后一行）的 \n 不加回车；其余位置不得有真实换行，也不得擅自删除已有回车
+        val stray = TestText.strayNewlineKeys().filterValues { it.isNotEmpty() }
+        assertTrue("这些条目在 \\n 之后的位置以外写了真实换行：$stray", stray.isEmpty())
+        val unbroken = TestText.unbrokenEscapeKeys().filterValues { it.isNotEmpty() }
+        assertTrue("这些条目内部的 \\n 后未跟源码回车：$unbroken", unbroken.isEmpty())
+        val trailing = TestText.trailingNewlineKeys().filterValues { it.isNotEmpty() }
+        assertTrue("这些条目末尾的 \\n 后多写了回车（最后一行不加）：$trailing", trailing.isEmpty())
     }
 }

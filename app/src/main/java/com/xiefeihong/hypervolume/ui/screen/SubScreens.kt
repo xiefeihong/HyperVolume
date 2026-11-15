@@ -32,7 +32,7 @@ import com.xiefeihong.hypervolume.ui.component.SecondaryButton
  * 顶栏标题与返回由 `HyperVolumeApp` 依 [UiState.route] 统一提供。
  */
 
-/** 模块日志页：系统框架 + 蓝牙 + LSPosed + logcat 合并结果。 */
+/** 模块日志页：仅系统框架日志（v1.1.8 起不再合并蓝牙 / LSPosed / logcat）。 */
 @Composable
 fun LogsScreen(state: UiState, vm: HyperVolumeViewModel) {
     val context = LocalContext.current

@@ -17,26 +17,22 @@ import kotlin.math.sqrt
  * AVRCP 值过低（部分耳机无声），且低音量区相邻档位差值小，易被耳机内部档位量化到同一格。
  *
  * 因此模式A 改用端点为 [minAbs, maxAbs] 的可选曲线（由 curveType 选择，预览与实际发送共用同一
- * 函数）：设 `e=(档位-1)/(最大档位-1)`，`lo = minAbs`（minAbs=0 时取 0.15*maxAbs 的自适应下限）：
+ * 函数）：设 `e=(档位-1)/(最大档位-1)`，`lo = minAbs`（minAbs=0 时 lo=0，第 1 档即静音，
+ * 不再自适应抬底；对数曲线改在 (v+1) 空间等比，保持曲线形状）：
  *
  * ```
  * 对数（默认）：absVolume = lo * (maxAbs / lo)^e
+ * 对数（min=0）：absVolume = (maxAbs + 1)^e - 1
  * 线性：absVolume = lo + (maxAbs - lo) * e
  * 平方根：absVolume = lo + (maxAbs - lo) * sqrt(e)
  * ```
  *
- * 三者均保证：档位 1 精确命中 minAbs（minAbs=0 时按 [MIN_VOLUME_FLOOR_RATIO] 取自适应可闻下限，
- * 避免第 1 档接近无声）；最大档位精确命中 maxAbs；档位 0 恒为静音。预览与实际发送（BtHooks 的
+ * 三者均保证：档位 1 精确命中 minAbs（minAbs=0 时第 1 档为 0）；最大档位精确命中 maxAbs；
+ * 档位 0 恒为静音。预览与实际发送（BtHooks 的
  * systemToAvrcp 拦截）调用同一函数，天然一致。模式B 与 AVRCP 无关，直接在同一曲线族下把档位
  * 映射为系统音量档位（[curveToSystemIndex]）。
  */
 object Avrcp {
-
-    /**
-     * 最小音量下限比例：当用户将「最小音量」设为 0 时，第 1 档自动取 [maxAbs] 的此比例
-     * 作为可闻下限（自适应耳机量程），而非退化为接近无声的 1。可据实机听感微调此常量。
-     */
-    const val MIN_VOLUME_FLOOR_RATIO = 0.06
 
     /**
      * 默认模式低音量区可分辨下限：第 1→2 档的原生 dB 差值小于此值时，相邻档位听感几乎相同，
@@ -60,18 +56,6 @@ object Avrcp {
         return intArrayOf(lo, hi)
     }
 
-    /**
-     * 对数曲线使用的区间：`[lo, hi]`，`hi = 归一上限`。
-     * 下限 `lo`：minAbs≥1 时精确=minAbs；minAbs=0 时按 [MIN_VOLUME_FLOOR_RATIO]
-     * 取 hi 的比例作为自适应可闻下限（避免第 1 档接近无声），并保证 lo≤hi、lo≥1。
-     */
-    private fun logRange(minAbs: Int, maxAbs: Int): IntArray {
-        val range = normalizedRange(minAbs, maxAbs)
-        val hi = range[1]
-        val lo = if (range[0] > 0) range[0] else max(1, (MIN_VOLUME_FLOOR_RATIO * hi).roundToInt())
-        return intArrayOf(min(lo, hi), hi)
-    }
-
     /** 曲线类型名称（预览与界面文案用，随语言切换）。 */
     fun curveLabel(curveType: Int): String = when (curveType) {
         Prefs.CURVE_LINEAR -> AppText.str(R.string.curve_short_linear)
@@ -87,8 +71,9 @@ object Avrcp {
     }
 
     /**
-     * 正向曲线：step → [lo,hi] 区间内的音量值。三曲线共用 logRange 的 lo/hi（min=0 时含自适应下限）。
-     * `e=(step-1)/(maxSteps-1)`：线性 `lo+(hi-lo)·e`；平方根 `lo+(hi-lo)·√e`；对数 `lo·(hi/lo)^e`。
+     * 正向曲线：step → [lo,hi] 区间内的音量值。三曲线共用 normalizedRange 的 lo/hi。
+     * `e=(step-1)/(maxSteps-1)`：线性 `lo+(hi-lo)·e`；平方根 `lo+(hi-lo)·√e`；
+     * 对数 `lo·(hi/lo)^e`（lo=0 时 `(hi+1)^e-1`，(v+1) 空间等比）。
      */
     private fun applyCurve(step: Int, maxSteps: Int, lo: Int, hi: Int, curveType: Int): Int {
         // 退化（maxSteps<=1 或 min>=max）：直接输出上限
@@ -101,7 +86,9 @@ object Avrcp {
         val value = when (curveType) {
             Prefs.CURVE_LINEAR -> dLo + (dHi - dLo) * e
             Prefs.CURVE_SQRT -> dLo + (dHi - dLo) * sqrt(e)
-            else -> dLo * (dHi / dLo).pow(e)
+            // lo=0 时纯等比无定义：改在 (v+1) 空间等比，端点仍精确命中 0 与 hi，
+            // 中段保持对数曲线形状（不退化为直线）。
+            else -> if (dLo <= 0) (dHi + 1).pow(e) - 1 else dLo * (dHi / dLo).pow(e)
         }
         return value.roundToInt().coerceIn(0, Prefs.AVRCP_MAX_VOLUME)
     }
@@ -119,7 +106,7 @@ object Avrcp {
                 val t = (absVolume - lo) / (dHi - dLo)
                 t * t
             }
-            else -> ln(absVolume.toDouble() / dLo) / ln(dHi / dLo)
+            else -> if (dLo <= 0) ln(absVolume + 1.0) / ln(dHi + 1) else ln(absVolume.toDouble() / dLo) / ln(dHi / dLo)
         }.coerceIn(0.0, 1.0)
         val step = (1 + (maxSteps - 1) * e).roundToInt()
         return step.coerceIn(0, maxSteps)
@@ -128,7 +115,7 @@ object Avrcp {
     /**
      * 模式A 映射：手机档位 → AVRCP 绝对音量（按 curveType 选择分布）。
      *
-     * 档位 0 保持静音；step=1 精确命中 minAbs（minAbs=0 时取自适应下限），
+     * 档位 0 保持静音；step=1 精确命中 minAbs（minAbs=0 时第 1 档为 0），
      * step=maxSteps 精确命中 maxAbs。
      */
     @JvmStatic
@@ -136,7 +123,7 @@ object Avrcp {
         if (maxSteps <= 0 || step <= 0) {
             return 0
         }
-        val range = logRange(minAbs, maxAbs)
+        val range = normalizedRange(minAbs, maxAbs)
         return applyCurve(step, maxSteps, range[0], range[1], curveType)
     }
 
@@ -146,14 +133,14 @@ object Avrcp {
         if (maxSteps <= 0 || absVolume <= 0) {
             return 0
         }
-        val range = logRange(minAbs, maxAbs)
+        val range = normalizedRange(minAbs, maxAbs)
         return invertCurve(absVolume, maxSteps, range[0], range[1], curveType)
     }
 
     /**
      * 模式B 映射（系统档位直映射，与 AVRCP 无关）：与模式A 同曲线族，但 min/max 以
      * **系统档位单位 0~maxSteps** 为经，一次 [applyCurve] 直接得到目标系统档位，
-     * 不再绕道 0~127（消除双重取整、精度更好）。min=0 时按同一自适应下限（`minStep` 空间）。
+     * 不再绕道 0~127（消除双重取整、精度更好）。min=0 时 lo=0（第 1 档为 0，不再自适应抬底）。
      */
     @JvmStatic
     fun curveToSystemIndex(step: Int, maxSteps: Int, minStep: Int, maxStep: Int, curveType: Int): Int {
@@ -163,9 +150,6 @@ object Avrcp {
         val range = clampSwapRange(maxSteps, minStep, maxStep)
         var lo = range[0]
         val hi = range[1]
-        if (lo <= 0) {
-            lo = max(1, (MIN_VOLUME_FLOOR_RATIO * hi).roundToInt())
-        }
         if (lo > hi) {
             lo = hi
         }

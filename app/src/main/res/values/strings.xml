@@ -116,7 +116,7 @@
     <string name="push_fail">写入系统配置失败，请确认 su 已授权</string>
     <string name="push_verify_fail">配置已写入系统，但回读内容与待保存配置不一致，请重试；若持续出现请查看调试信息。</string>
     <string name="auto_save_fail">自动保存失败：无法写入系统配置，请确认 su 已授权</string>
-    <string name="save_done">已保存，无需重启即可生效。</string>
+    <string name="save_done">已保存</string>
     <string name="save_done_title">保存成功</string>
     <string name="restart_now">立即重启</string>
     <string name="restart_later">稍后手动</string>
@@ -193,15 +193,15 @@
 
     <!-- ==================== 模块日志页 ==================== -->
     <string name="log_title">模块日志（HyperVolume）</string>
-    <string name="log_empty">未找到模块日志。可能原因：\n• LSPosed 中未启用模块\n• 安装本版本后尚未重启过系统框架 / 蓝牙（Hook 只在进程启动时加载）\n• 此处显示全部级别日志；LSPosed 日志页仅记录错误日志（E 级）</string>
+    <string name="log_empty">未找到模块日志。可能原因：\n
+• LSPosed 中未启用模块\n
+• 安装本版本后尚未重启过系统框架（Hook 只在进程启动时加载）\n
+• 此处显示全部级别日志；LSPosed 日志页仅记录错误日志（E 级）</string>
     <string name="log_sec_sys">[系统框架日志]\n</string>
-    <string name="log_sec_bt">[蓝牙日志]\n</string>
-    <string name="log_sec_lspd">[LSPosed 日志]\n</string>
-    <string name="log_sec_logcat">[logcat]\n</string>
     <string name="log_none">未找到任何日志。\n</string>
     <string name="log_check_paths">请检查以下路径的文件是否存在：\n</string>
     <string name="log_loading">正在读取日志…</string>
-    <string name="log_page_summary">查看系统框架、蓝牙与 LSPosed 中的模块日志</string>
+    <string name="log_page_summary">查看系统框架中的模块日志</string>
     <string name="refresh_summary">重新探测 Root、LSPosed 与当前生效档位</string>
     <string name="logs_cleared">日志文件已清理</string>
     <string name="action_failed">操作失败：%1$s</string>
@@ -239,7 +239,10 @@
     <string name="backup_import_root">导入备份需要 Root 授权（配置只能写回系统）</string>
     <string name="backup_imported_restart">备份已导入并写入系统，需重启后生效。</string>
     <string name="backup_scope_title">备份包含</string>
-    <string name="backup_scope_body">• 生效配置（Settings.Global 中的本模块键，全应用唯一一份，JSON）\n• 系统原生档位数、恢复默认确认标记\n• 语言、颜色等界面偏好\n导入需要 Root 授权（配置只能写回系统）。不包含蓝牙配对信息与 LSPosed 启用状态。</string>
+    <string name="backup_scope_body">• 生效配置（Settings.Global 中的本模块键，全应用唯一一份，JSON）\n
+• 系统原生档位数、恢复默认确认标记\n
+• 语言、颜色等界面偏好\n
+导入需要 Root 授权（配置只能写回系统）。不包含蓝牙配对信息与 LSPosed 启用状态。</string>
 
     <!-- ==================== 故障排除 / 调试信息 ==================== -->
     <string name="debug_info">调试信息</string>
@@ -271,8 +274,6 @@
     <string name="landing_no_root">需 Root 授权</string>
     <string name="landing_global">全局设置</string>
     <string name="landing_mirror">配置镜像</string>
-    <string name="perf_log_title">性能日志</string>
-    <string name="perf_log_summary">开启后每次保存额外记录一条耗时日志（排障用，会多一次 root 调用）</string>
 
     <!-- ==================== 关于页 ==================== -->
     <string name="about_title">关于</string>
@@ -310,5 +311,13 @@
     <string name="license_libxposed_summary">Apache License 2.0 · LSPosed 现代 API</string>
 
     <!-- ==================== 使用说明（关于页） ==================== -->
-    <string name="guide_text" formatted="false">1. 在 LSPosed 中启用本模块，然后重启系统框架（主页按钮即可）。\n2. 媒体音量档位：可设置 10~100 档（HyperOS 原生默认 15），档位即音量条的可分辨精度，只影响媒体流（音乐/视频）；修改档位后点「重启系统框架」，期间黑屏属正常现象。音量键步进（10~29 段）控制每按一次音量键跳过的档位数（约＝档位÷段数），只影响按键、不影响屏幕拖动。\n3. 绝对音量模式：蓝牙保持绝对音量映射（档位经曲线映射为 AVRCP 0~127）；第 1 档=最小音量、最高档=最大音量。\n4. 相对音量模式（低音量问题首选）：停用绝对音量，由手机端软件衰减音频信号，耳机固定自身硬件音量。\n5. 默认模式：不改档位数、不加自定义曲线，把系统档位在所选最小/最大范围内线性等分重映射，两端锚到 min/max、中间保留 ROM 原生响度曲线（满量程即直通）；可在曲线图切换纵轴口径（dB 线性/感知响度）查看该原生曲线。\n6. 设备选项卡在「蓝牙/有线耳机/外放」间切换，各设备独立保存模式与范围（打开 App 会自动定位到当前输出设备）。绝对音量仅蓝牙可选；相对音量对三种设备都按各自范围在系统侧衰减；默认则该设备把系统档位在所选最小/最大范围内线性映射、中间保留 ROM 原生响度曲线（满量程即直通）。档位数与音量键步进为全局共用。\n7. 生效方式：点「保存修改」保存参数，按提示确认重启。切换模式或调整音量范围后需点「重启蓝牙」生效；仅档位修改后需点「重启系统框架」（音量键步进即时生效）。\n8. 回到原生行为：在「设置 → 通用」关闭「启用模块」，点「保存修改」后按提示重启系统框架即完全停用；要抹掉本应用写入的数据可用「设置 → 备份与恢复 → 清除数据」；也可在 LSPosed 中停用模块后重启手机。\n9. 排查：状态区查看媒体档位是否生效；在「设置 → 故障排除 → 模块日志」查看模块自写日志。</string>
+    <string name="guide_text" formatted="false">1. 在 LSPosed 中启用本模块，然后重启系统框架（主页按钮即可）。\n\n
+2. 媒体音量档位：可设置 10~100 档（HyperOS 原生默认 15），档位即音量条的可分辨精度，只影响媒体流（音乐/视频）；修改档位后点「重启系统框架」，期间黑屏属正常现象。音量键步进（10~29 段）控制每按一次音量键跳过的档位数（约＝档位÷段数），只影响按键、不影响屏幕拖动。\n\n
+3. 绝对音量模式：蓝牙保持绝对音量映射（档位经曲线映射为 AVRCP 0~127）；第 1 档=最小音量、最高档=最大音量。\n\n
+4. 相对音量模式（低音量问题首选）：停用绝对音量，由手机端软件衰减音频信号，耳机固定自身硬件音量。\n\n
+5. 默认模式：不改档位数、不加自定义曲线，把系统档位在所选最小/最大范围内线性等分重映射，两端锚到 min/max、中间保留 ROM 原生响度曲线（满量程即直通）；可在曲线图切换纵轴口径（dB 线性/感知响度）查看该原生曲线。\n\n
+6. 设备选项卡在「蓝牙/有线耳机/外放」间切换，各设备独立保存模式与范围（打开 App 会自动定位到当前输出设备）。绝对音量仅蓝牙可选；相对音量对三种设备都按各自范围在系统侧衰减；默认则该设备把系统档位在所选最小/最大范围内线性映射、中间保留 ROM 原生响度曲线（满量程即直通）。档位数与音量键步进为全局共用。\n\n
+7. 生效方式：点「保存修改」保存参数，按提示确认重启。切换模式或调整音量范围后需点「重启蓝牙」生效；仅档位修改后需点「重启系统框架」（音量键步进即时生效）。\n\n
+8. 回到原生行为：在「设置 → 通用」关闭「启用模块」，点「保存修改」后按提示重启系统框架即完全停用；要抹掉本应用写入的数据可用「设置 → 备份与恢复 → 清除数据」；也可在 LSPosed 中停用模块后重启手机。\n\n
+9. 排查：状态区查看媒体档位是否生效；在「设置 → 故障排除 → 模块日志」查看模块自写日志。</string>
 </resources>

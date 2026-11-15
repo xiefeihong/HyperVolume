@@ -135,13 +135,6 @@ private fun BackupSection(state: UiState, vm: HyperVolumeViewModel) {
 @Composable
 private fun TroubleshootSection(state: UiState, vm: HyperVolumeViewModel) {
     SectionCard(title = stringResource(R.string.tab_troubleshoot)) {
-        SwitchPreference(
-            checked = state.perfLog,
-            onCheckedChange = vm::onTogglePerfLog,
-            title = stringResource(R.string.perf_log_title),
-            summary = stringResource(R.string.perf_log_summary),
-        )
-        SectionDivider()
         ArrowPreference(
             title = stringResource(R.string.debug_info),
             summary = stringResource(R.string.debug_info_summary),

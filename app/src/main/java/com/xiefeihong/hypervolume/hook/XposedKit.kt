@@ -49,6 +49,9 @@ object XposedKit {
 
     /** 系统框架与蓝牙的 AudioService / 相关类路径。 */
     const val AUDIO_SERVICE_CLASS = "com.android.server.audio.AudioService"
+
+    /** HyperOS 的 AudioService 子类；冷启动音量键可能派发到它自有的 override。 */
+    const val MI_AUDIO_SERVICE_CLASS = "com.android.server.audio.MiAudioService"
     const val AUDIO_DEVICE_BROKER_CLASS = "com.android.server.audio.AudioDeviceBroker"
     const val VOLUME_STREAM_STATE_CLASS = "com.android.server.audio.AudioService\$VolumeStreamState"
 
@@ -603,6 +606,16 @@ object XposedKit {
             sCachedConfig = config
         }
         return config
+    }
+
+    /**
+     * 同步直读配置镜像（绕过 TTL 缓存与负面退避），供冷启动按键瞬间
+     * [readConfig] 返回 null 时的兜底重试；读不到返回 null。
+     */
+    fun readConfigFromMirror(): VolumeConfig? = try {
+        parseCached(readMirrorConfig())
+    } catch (t: Throwable) {
+        null
     }
 
     /** 读取 App 以 root 写入的配置镜像（[Prefs.MIRROR_CONFIG_FILE]）。 */

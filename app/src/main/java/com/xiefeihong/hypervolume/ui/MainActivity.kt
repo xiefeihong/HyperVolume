@@ -1,11 +1,16 @@
 package com.xiefeihong.hypervolume.ui
 
 import android.content.Context
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.ViewModelProvider
 import com.xiefeihong.hypervolume.app.AppLanguage
 import com.xiefeihong.hypervolume.app.SettingsStore
 import com.xiefeihong.hypervolume.app.localizedFor
@@ -32,6 +37,29 @@ class MainActivity : ComponentActivity() {
     var appliedLanguage: AppLanguage = AppLanguage.SYSTEM
         private set
 
+    private lateinit var vm: HyperVolumeViewModel
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var refreshPending = false
+
+    /**
+     * 蓝牙音频设备连接/断开时自动刷新运行状态（v1.1.8 起取代主页右上角手动刷新按钮）。
+     * 用 [AudioDeviceCallback] 而非 BT 广播：状态行本就读 [AudioManager.getDevices]，
+     * 且无需 BLUETOOTH_CONNECT 权限。debounce 500ms 合并一次连接引发的多次回调。
+     */
+    private val audioDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = scheduleRefresh()
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = scheduleRefresh()
+    }
+
+    private fun scheduleRefresh() {
+        if (refreshPending) return
+        refreshPending = true
+        mainHandler.postDelayed({
+            refreshPending = false
+            vm.refreshStatus()
+        }, 500)
+    }
+
     override fun attachBaseContext(newBase: Context) {
         val language = SettingsStore.readLanguage(newBase)
         appliedLanguage = language
@@ -46,8 +74,18 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // 状态栏/导航栏透明（themes.xml），边衬由 Miuix Scaffold 的 window insets 统一处理。
         enableEdgeToEdge()
+        vm = ViewModelProvider(this)[HyperVolumeViewModel::class.java]
         setContent {
-            HyperVolumeApp(vm = viewModel())
+            HyperVolumeApp(vm = vm)
         }
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        am?.registerAudioDeviceCallback(audioDeviceCallback, mainHandler)
+    }
+
+    override fun onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null)
+        (getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
+            ?.unregisterAudioDeviceCallback(audioDeviceCallback)
+        super.onDestroy()
     }
 }

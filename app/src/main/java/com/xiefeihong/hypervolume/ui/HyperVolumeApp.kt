@@ -130,17 +130,9 @@ fun HyperVolumeApp(vm: HyperVolumeViewModel) {
                             }
                         }
                     },
-                    actions = {
-                        // 主页右上角：手动重新探测运行状态（与设置-故障排除里的「刷新检测」同一动作）。
-                        if (onHome) {
-                            IconButton(onClick = vm::refreshStatus) {
-                                Icon(
-                                    imageVector = MiuixIcons.Refresh,
-                                    contentDescription = stringResource(R.string.btn_refresh),
-                                )
-                            }
-                        }
-                    },
+                    // 主页右上角手动刷新已移除（v1.1.8）：运行状态随 ON_RESUME 与
+                    // 蓝牙音频设备插拔（MainActivity AudioDeviceCallback）自动刷新。
+                    actions = {},
                 )
             },
         ) { innerPadding ->
